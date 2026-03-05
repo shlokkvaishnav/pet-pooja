@@ -1,10 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LightRays from '../components/LightRays'
+import { useAuth } from '../context/AuthContext'
+import { useTranslation } from '../context/LanguageContext'
 import './Login.css'
 
 export default function Login() {
     const navigate = useNavigate()
+    const { login } = useAuth()
+    const { t } = useTranslation()
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [loading, setLoading] = useState(false)
@@ -14,7 +18,7 @@ export default function Login() {
     const handleLogin = async (e) => {
         e.preventDefault()
         if (!email || !password) {
-            setError('Please fill in all fields.')
+            setError(t('login_error_fields'))
             return
         }
         setError('')
@@ -22,6 +26,7 @@ export default function Login() {
 
         setTimeout(() => {
             setLoading(false)
+            login()
             navigate('/dashboard')
         }, 1200)
     }
@@ -30,7 +35,7 @@ export default function Login() {
         <div className="login-root">
             <a href="#" className="login-back-btn" onClick={(e) => { e.preventDefault(); navigate('/'); }}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
-                Back to Home
+                {t('login_back')}
             </a>
 
             {/* The interactive LightRays page background */}
@@ -72,10 +77,10 @@ export default function Login() {
             <div className="login-glass-card">
                 {/* ─── LEFT SIDE ─── */}
                 <div className="login-side-left">
-                    <p className="login-left-subtitle">Sizzle AI — Your restaurant copilot.</p>
+                    <p className="login-left-subtitle">{t('login_left_sub')}</p>
                     <h2 className="login-left-title">
-                        Manage<br />
-                        your restaurant
+                        {t('login_left_title_1')}<br />
+                        {t('login_left_title_2')}
                     </h2>
                 </div>
 
@@ -91,13 +96,13 @@ export default function Login() {
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
                             </svg>
-                            Sign Up
+                            {t('login_signup')}
                         </a>
                     </div>
 
                     {/* Form Area */}
                     <div className="login-form-area">
-                        <h1>Sign In</h1>
+                        <h1>{t('login_signin')}</h1>
 
                         <form onSubmit={handleLogin}>
                             {error && (
@@ -108,7 +113,7 @@ export default function Login() {
                                 <input
                                     type="text"
                                     className="login-input"
-                                    placeholder="Email or Username"
+                                    placeholder={t('login_email_placeholder')}
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
                                     autoComplete="username"
@@ -119,7 +124,7 @@ export default function Login() {
                                 <input
                                     type={showPassword ? "text" : "password"}
                                     className="login-input"
-                                    placeholder="Password"
+                                    placeholder={t('login_password_placeholder')}
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     autoComplete="current-password"
@@ -138,17 +143,17 @@ export default function Login() {
                                 </button>
                             </div>
 
-                            <a href="#" className="login-forgot-link">Forgot password?</a>
+                            <a href="#" className="login-forgot-link">{t('login_forgot')}</a>
 
                             <button
                                 type="submit"
                                 className="login-submit-btn"
                                 disabled={loading}
                             >
-                                {loading ? 'Signing in...' : (
+                                {loading ? t('login_signing_in') : (
                                     <>
                                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 8l4 4-4 4" /><path d="M4 12h14" /></svg>
-                                        Sign In
+                                        {t('login_submit')}
                                     </>
                                 )}
                             </button>

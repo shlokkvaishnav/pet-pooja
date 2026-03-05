@@ -17,10 +17,12 @@ const TypewriterText = ({
     const [phase, setPhase] = useState('pending'); // pending -> base -> typing -> pausing -> deleting -> typing -> ... -> done
     const [wordIndex, setWordIndex] = useState(0);
 
-    // Trigger start
+    // Trigger start or restart if props change
     useEffect(() => {
-        if (start && !started) {
+        if (start) {
             setStarted(true);
+            setDisplayedText('');
+            setWordIndex(0);
             if (baseText) {
                 setPhase('base');
             } else if (words.length > 0) {
@@ -29,7 +31,7 @@ const TypewriterText = ({
                 setPhase('done');
             }
         }
-    }, [start, started, baseText, words]);
+    }, [start, baseText, words.join(',')]);
 
     useEffect(() => {
         if (!started || phase === 'done' || phase === 'pending') return;

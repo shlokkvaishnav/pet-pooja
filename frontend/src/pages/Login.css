@@ -1,7 +1,7 @@
 /* Login.css - Specific stylesheet for the stylized sign-in page */
 
 .login-root {
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -9,7 +9,7 @@
     position: relative;
     overflow: hidden;
     font-family: var(--font), sans-serif;
-    padding: 40px;
+    padding: 0 40px;
 }
 
 /* Back Button */

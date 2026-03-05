@@ -1,10 +1,13 @@
 import { BrowserRouter, Routes, Route, NavLink, Outlet } from 'react-router-dom'
+import { LanguageProvider } from './context/LanguageContext'
+import { AuthProvider } from './context/AuthContext'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import MenuAnalysis from './pages/MenuAnalysis'
 import ComboEngine from './pages/ComboEngine'
 import VoiceOrder from './pages/VoiceOrder'
+import AboutUs from './pages/AboutUs'
 
 function DashboardLayout() {
   return (
@@ -49,20 +52,25 @@ function DashboardLayout() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* Public routes */}
-        <Route path="/" element={<Landing />} />
-        <Route path="/login" element={<Login />} />
+    <LanguageProvider>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* Public routes */}
+            <Route path="/" element={<Landing />} />
+            <Route path="/about" element={<AboutUs />} />
+            <Route path="/login" element={<Login />} />
 
-        {/* Dashboard routes (after login) */}
-        <Route path="/dashboard" element={<DashboardLayout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="menu-analysis" element={<MenuAnalysis />} />
-          <Route path="combos" element={<ComboEngine />} />
-          <Route path="voice-order" element={<VoiceOrder />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+            {/* Dashboard routes (after login) */}
+            <Route path="/dashboard" element={<DashboardLayout />}>
+              <Route index element={<Dashboard />} />
+              <Route path="menu-analysis" element={<MenuAnalysis />} />
+              <Route path="combos" element={<ComboEngine />} />
+              <Route path="voice-order" element={<VoiceOrder />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
+    </LanguageProvider>
   )
 }
