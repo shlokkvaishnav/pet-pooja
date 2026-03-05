@@ -16,13 +16,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 class MockItem:
     """Mock MenuItem ORM object for testing without DB."""
-    def __init__(self, id, name, name_hi, aliases, selling_price, modifiers):
+    def __init__(self, id, name, name_hi, aliases, selling_price, modifiers,
+                 is_available=True, current_stock=None):
         self.id = id
         self.name = name
         self.name_hi = name_hi
         self.aliases = aliases
         self.selling_price = selling_price
         self.modifiers = modifiers
+        self.is_available = is_available
+        self.current_stock = current_stock  # None = unlimited
 
 
 # Mock menu items (simulates what DB would return)
@@ -31,7 +34,8 @@ menu_items = [
     MockItem(2, "Butter Naan",   "butter nan",  "bttr naan|butter nan",  60,  '{}'),
     MockItem(3, "Dal Makhani",   "dal makhni",  "dal makhni|daal makhani", 280, '{"spice":["mild","medium","hot"]}'),
     MockItem(4, "Mango Lassi",   "mango lassi", "mango lassi|lassi mango", 120, '{}'),
-    MockItem(5, "Veg Biryani",   "veg biryani", "veg biryani|biryani",   320, '{"spice":["mild","medium","hot"]}'),
+    MockItem(5, "Veg Biryani",   "veg biryani", "veg biryani|biryani",   320, '{"spice":["mild","medium","hot"]}',
+            is_available=False),  # out of stock for testing
 ]
 
 
@@ -187,6 +191,124 @@ def test_full_pipeline():
     return passed == len(tests)
 
 
+def test_error_taxonomy():
+    """
+    Test the structured error taxonomy with a compound sentence that
+    exercises every pipeline stage:
+      - Compound intent (ORDER + MODIFY)
+      - Successful match (paneer tikka, butter naan)
+      - Out-of-stock item (veg biryani — is_available=False)
+      - Zero match with fuzzy recovery ("chicken momos" — not on menu)
+      - Unsupported modifier ("large" size on butter naan — no size options)
+      - Valid modifier (extra spicy on paneer tikka)
+      - Quantity extraction (2 paneer tikka, 1 butter naan, 1 veg biryani)
+    """
+    from modules.voice.pipeline import VoicePipeline
+
+    print("=" * 60)
+    print("TESTING ERROR TAXONOMY (Compound Stress Test)")
+    print("=" * 60)
+
+    pipeline = VoicePipeline(
+        db_session=None,
+        menu_items=menu_items,
+        combo_rules=[],
+        hidden_stars=[],
+    )
+
+    # ── The magic sentence ──
+    #   Clause splitting: "aur"/"but" split into sub-clauses
+    #   "dena" in the order clause ensures ORDER intent classification
+    #   "chicken momos" is NOT on the menu → zero_match + fuzzy recovery
+    #   "large butter naan" → unsupported modifier (no size options)
+    #   "veg biryani" → is_available=False → out_of_stock
+    #   "extra spicy paneer tikka" → valid modifier (hot spice)
+    #   "cancel dal makhani" → compound CANCEL clause
+    test_input = (
+        "2 paneer tikka extra spicy aur 1 large butter naan "
+        "aur 1 veg biryani aur chicken momos dena, "
+        "but cancel dal makhani"
+    )
+
+    print(f"\n  Input: '{test_input}'\n")
+    result = pipeline.process_text(test_input)
+
+    checks = []
+
+    # 1. Compound intents detected
+    is_compound = result.get("is_compound", False)
+    intents = [i["intent"] for i in result.get("intents", [])]
+    checks.append(("Compound detected", is_compound))
+    print(f"  [{'PASS' if is_compound else 'FAIL'}] Compound: {is_compound}, intents: {intents}")
+
+    # 2. stage_results present (list)
+    sr = result.get("stage_results", None)
+    has_sr = isinstance(sr, list)
+    checks.append(("stage_results is list", has_sr))
+    print(f"  [{'PASS' if has_sr else 'FAIL'}] stage_results: {len(sr) if has_sr else 'MISSING'} entries")
+
+    # 3. user_messages present (list)
+    um = result.get("user_messages", None)
+    has_um = isinstance(um, list)
+    checks.append(("user_messages is list", has_um))
+    print(f"  [{'PASS' if has_um else 'FAIL'}] user_messages: {len(um) if has_um else 'MISSING'} entries")
+
+    # 4. Print every stage result
+    if has_sr:
+        for i, s in enumerate(sr):
+            print(f"    stage_result[{i}]: status={s.get('status')}, "
+                  f"type={s.get('error_type')}, msg={s.get('user_message', '')[:80]}")
+
+    # 5. Print every user message
+    if has_um:
+        for i, msg in enumerate(um):
+            print(f"    user_message[{i}]: {msg[:100]}")
+
+    # 6. Out-of-stock item flagged
+    oos_items = [i for i in result.get("items", []) if i.get("out_of_stock")]
+    has_oos = len(oos_items) > 0
+    checks.append(("Out-of-stock flagged", has_oos))
+    print(f"  [{'PASS' if has_oos else 'FAIL'}] Out-of-stock items: "
+          f"{[i['item_name'] for i in oos_items] if oos_items else 'NONE'}")
+
+    # 7. Any stage result with error_type containing "zero_match" or "out_of_stock" or "modifier"
+    error_types = [s.get("error_type", "") for s in (sr or [])]
+    has_oos_sr = any("out_of_stock" in t for t in error_types)
+    checks.append(("out_of_stock stage result", has_oos_sr))
+    print(f"  [{'PASS' if has_oos_sr else 'FAIL'}] out_of_stock in stage_results: {has_oos_sr}")
+
+    has_zero = any("zero_item_matches" in t for t in error_types)
+    checks.append(("zero_match stage result", has_zero))
+    print(f"  [{'PASS' if has_zero else 'FAIL'}] zero_item_matches in stage_results: {has_zero} "
+          f"(for 'chicken momos')")
+
+    # 8. Needs clarification
+    nc = result.get("needs_clarification", False)
+    checks.append(("needs_clarification", nc))
+    print(f"  [{'PASS' if nc else 'FAIL'}] needs_clarification: {nc}")
+
+    # 9. Items matched
+    items = result.get("items", [])
+    item_names = [i["item_name"] for i in items]
+    has_items = len(items) >= 2
+    checks.append(("At least 2 items matched", has_items))
+    print(f"  [{'PASS' if has_items else 'FAIL'}] Items: {item_names}")
+
+    # 10. Print full order summary
+    print(f"\n  Intent: {result.get('intent')}")
+    print(f"  Normalized: {result.get('normalized')}")
+    for item in items:
+        mods = item.get("modifiers", {})
+        oos = " [OUT OF STOCK]" if item.get("out_of_stock") else ""
+        print(f"    -> {item['item_name']} x{item['quantity']} "
+              f"Rs.{item.get('line_total', '?')} spice={mods.get('spice_level', '-')}{oos}")
+
+    passed = sum(1 for _, ok in checks if ok)
+    total = len(checks)
+    print(f"\n  Error Taxonomy: {passed}/{total} passed\n")
+    return passed == total
+
+
 if __name__ == "__main__":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
@@ -197,6 +319,8 @@ if __name__ == "__main__":
     results.append(("Intent Mapper", test_intent_mapper()))
     results.append(("Item Matcher", test_item_matcher()))
     results.append(("Full Pipeline", test_full_pipeline()))
+
+    results.append(("Error Taxonomy", test_error_taxonomy()))
 
     print("=" * 60)
     print("SUMMARY")

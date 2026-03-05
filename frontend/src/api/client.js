@@ -29,14 +29,45 @@ export const getHiddenStars = () =>
 export const getRisks = () =>
   api.get('/revenue/risks').then(r => r.data)
 
-export const getCombos = () =>
-  api.get('/revenue/combos').then(r => r.data)
+export const getCombos = (forceRetrain = false, discountPct = 10) =>
+  api.get('/revenue/combos', { params: { force_retrain: forceRetrain, discount_pct: discountPct } }).then(r => r.data)
 
 export const getPriceRecommendations = () =>
   api.get('/revenue/price-recommendations').then(r => r.data)
 
 export const getCategoryBreakdown = () =>
   api.get('/revenue/category-breakdown').then(r => r.data)
+
+// ── Trends & Time-Series ──
+
+export const getTrends = () =>
+  api.get('/revenue/trends').then(r => r.data)
+
+export const getWowMom = () =>
+  api.get('/revenue/trends/wow-mom').then(r => r.data)
+
+export const getPriceElasticity = () =>
+  api.get('/revenue/trends/price-elasticity').then(r => r.data)
+
+// ── Advanced Analytics ──
+
+export const getCannibalization = (days = 90) =>
+  api.get('/revenue/analytics/cannibalization', { params: { days } }).then(r => r.data)
+
+export const getPriceSensitivity = () =>
+  api.get('/revenue/analytics/price-sensitivity').then(r => r.data)
+
+export const getWasteAnalysis = (days = 30) =>
+  api.get('/revenue/analytics/waste', { params: { days } }).then(r => r.data)
+
+export const getCustomerReturns = (days = 30) =>
+  api.get('/revenue/analytics/customer-returns', { params: { days } }).then(r => r.data)
+
+export const getMenuComplexity = () =>
+  api.get('/revenue/analytics/menu-complexity').then(r => r.data)
+
+export const getOperationalMetrics = (days = 30) =>
+  api.get('/revenue/analytics/operational', { params: { days } }).then(r => r.data)
 
 // ── Voice Ordering ──
 

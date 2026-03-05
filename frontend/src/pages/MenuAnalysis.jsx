@@ -1,17 +1,24 @@
 import { useState, useEffect } from 'react'
-import { getMenuMatrix } from '../api/client'
+import { getMenuMatrix, getTrends } from '../api/client'
 import MenuMatrix from '../components/MenuMatrix'
 import ItemTable from '../components/ItemTable'
 
 export default function MenuAnalysis() {
   const [data, setData] = useState(null)
+  const [trends, setTrends] = useState(null)
   const [loading, setLoading] = useState(true)
   const [quadrantFilter, setQuadrantFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
 
   useEffect(() => {
-    getMenuMatrix()
-      .then(setData)
+    Promise.all([
+      getMenuMatrix(),
+      getTrends().catch(() => null),
+    ])
+      .then(([matrixData, trendsData]) => {
+        setData(matrixData)
+        setTrends(trendsData)
+      })
       .catch(err => console.error('Menu Matrix failed:', err))
       .finally(() => setLoading(false))
   }, [])
@@ -27,12 +34,40 @@ export default function MenuAnalysis() {
   const { items, summary } = data
   const categories = ['all', ...Array.from(new Set(items.map(i => i.category)))]
 
+  // Build trend lookup for items
+  const itemTrendMap = {}
+  if (trends?.item_trends) {
+    for (const t of trends.item_trends) {
+      itemTrendMap[t.item_id] = t
+    }
+  }
+
+  // Enrich items with trend data
+  const enrichedItems = items.map(item => {
+    const trend = itemTrendMap[item.item_id]
+    return {
+      ...item,
+      revenue_trend_arrow: trend?.revenue_trend_arrow || '',
+      popularity_trend_arrow: trend?.popularity_trend_arrow || '',
+      revenue_trend_pct: trend?.revenue_trend_pct || 0,
+      direction: trend?.direction || '',
+    }
+  })
+
   // Calculate counts if backend summary isn't fully providing them yet for the new quadrants
   const quadrantCounts = {
     star: items.filter(i => i.quadrant === 'star').length,
     hidden_star: items.filter(i => i.quadrant === 'hidden_star').length,
     workhorse: items.filter(i => i.quadrant === 'workhorse').length,
     dog: items.filter(i => i.quadrant === 'dog').length,
+  }
+
+  // Drift counts per quadrant
+  const driftItems = trends?.quadrant_drift || []
+  const driftByQuadrant = {}
+  for (const d of driftItems) {
+    const q = d.current_quadrant
+    driftByQuadrant[q] = (driftByQuadrant[q] || 0) + 1
   }
 
   return (
@@ -70,6 +105,11 @@ export default function MenuAnalysis() {
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                 {q.label}
               </div>
+              {driftByQuadrant[q.id] > 0 && (
+                <div style={{ fontSize: 10, color: 'var(--amber)', marginTop: 4 }}>
+                  ⚡ {driftByQuadrant[q.id]} drifting
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -110,10 +150,44 @@ export default function MenuAnalysis() {
             </div>
           </div>
           <div className="card-body" style={{ padding: 0, maxHeight: 440, overflowY: 'auto' }}>
-            <ItemTable items={items} categoryFilter={categoryFilter} quadrantFilter={quadrantFilter} />
+            <ItemTable items={enrichedItems} categoryFilter={categoryFilter} quadrantFilter={quadrantFilter} />
           </div>
         </div>
       </div>
+
+      {/* Category Trends */}
+      {trends?.category_trends?.length > 0 && (
+        <div className="card" style={{ marginTop: 24 }}>
+          <div className="card-header">📊 Category Revenue Trends (30-day comparison)</div>
+          <div className="card-body" style={{ padding: 0 }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Revenue (Last 30d)</th>
+                  <th>Revenue (Prev 30d)</th>
+                  <th>Trend</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trends.category_trends.map((ct, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{ct.category_name}</td>
+                    <td>₹{ct.revenue_last_30d?.toLocaleString()}</td>
+                    <td>₹{ct.revenue_prev_30d?.toLocaleString()}</td>
+                    <td style={{
+                      fontWeight: 600,
+                      color: ct.trend_pct > 0 ? 'var(--green)' : ct.trend_pct < 0 ? 'var(--red)' : 'var(--text-muted)'
+                    }}>
+                      {ct.trend_arrow} {ct.trend_pct > 0 ? '+' : ''}{ct.trend_pct}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

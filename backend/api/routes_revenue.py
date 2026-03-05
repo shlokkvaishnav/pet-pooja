@@ -2,7 +2,8 @@
 routes_revenue.py — Revenue Intelligence API Endpoints
 ========================================================
 /api/revenue/* — Dashboard, menu matrix, hidden stars, risks,
-combos, price recommendations, category breakdown
+combos, price recommendations, category breakdown, trends,
+advanced analytics
 """
 
 import logging
@@ -22,6 +23,19 @@ from modules.revenue.menu_matrix import classify_menu_matrix, get_quadrant_summa
 from modules.revenue.hidden_stars import detect_hidden_stars
 from modules.revenue.combo_engine import generate_combos
 from modules.revenue.price_optimizer import generate_price_recommendations
+from modules.revenue.trend_analyzer import (
+    calculate_trends,
+    calculate_wow_mom,
+    estimate_price_elasticity,
+)
+from modules.revenue.advanced_analytics import (
+    analyze_category_cannibalization,
+    estimate_price_sensitivity,
+    analyze_waste_and_voids,
+    estimate_customer_return_rate,
+    calculate_menu_complexity,
+    calculate_operational_metrics,
+)
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.revenue")
@@ -50,7 +64,8 @@ def _set_cached(key: str, data):
 def get_dashboard(db: Session = Depends(get_db)):
     """
     GET /api/revenue/dashboard
-    Returns: total_revenue, avg_cm_percent, items_at_risk_count, uplift_potential
+    Returns: total_revenue, avg_cm_percent, items_at_risk_count, uplift_potential,
+             health_score with breakdown, operational metrics
     """
     try:
         cached = _get_cached("dashboard")
@@ -75,16 +90,27 @@ def get_dashboard(db: Session = Depends(get_db)):
         hidden_stars = analysis.get("hidden_stars", [])
         uplift = sum(h.get("estimated_monthly_uplift", 0) for h in hidden_stars)
 
+        # Operational metrics
+        ops = calculate_operational_metrics(db)
+
         result = {
             "total_revenue": round(total_revenue, 2),
             "avg_cm_percent": summary.get("avg_margin_pct", 0),
             "items_at_risk_count": items_at_risk,
             "uplift_potential": round(uplift, 2),
             "health_score": summary.get("health_score", 0),
+            "health_score_breakdown": summary.get("health_score_breakdown", {}),
             "total_items": summary.get("total_items", 0),
             "stars_count": summary.get("stars", 0),
+            "plowhorses_count": summary.get("plowhorses", 0),
+            "puzzles_count": summary.get("puzzles", 0),
             "dogs_count": summary.get("dogs", 0),
             "hidden_stars_count": summary.get("hidden_stars_count", 0),
+            # Operational metrics
+            "avg_order_value": ops.get("avg_order_value", 0),
+            "total_orders": ops.get("total_orders", 0),
+            "peak_hours": ops.get("peak_hours", [])[:5],
+            "orders_by_type": ops.get("orders_by_type", []),
         }
 
         _set_cached("dashboard", result)
@@ -171,18 +197,28 @@ def get_risk_items(db: Session = Depends(get_db)):
 
 
 @router.get("/combos")
-def get_combo_suggestions(db: Session = Depends(get_db)):
+def get_combo_suggestions(
+    db: Session = Depends(get_db),
+    force_retrain: bool = Query(False, description="Force retraining of combo model"),
+    discount_pct: float = Query(10.0, ge=1.0, le=30.0, description="Target discount percentage"),
+):
     """
     GET /api/revenue/combos
     Returns: top 20 combos from FP-Growth combo engine.
-    Results are cached since computation is expensive.
+    Results are cached in DB. Out-of-stock items are filtered.
+    Pass force_retrain=true to retrain on demand.
     """
     try:
-        cached = _get_cached("combos")
-        if cached:
-            return {"combos": cached}
+        if not force_retrain:
+            cached = _get_cached("combos")
+            if cached:
+                return {"combos": cached}
 
-        combos = generate_combos(db)
+        combos = generate_combos(
+            db,
+            target_discount_pct=discount_pct,
+            force_retrain=force_retrain,
+        )
         _set_cached("combos", combos)
         return {"combos": combos}
     except Exception as e:
@@ -286,3 +322,142 @@ def get_pricing_legacy(db: Session = Depends(get_db)):
     margins = calculate_margins(db)
     popularity = calculate_popularity(db)
     return {"recommendations": generate_price_recommendations(margins, popularity)}
+
+
+# ── Trend & Time-Series Endpoints ──
+
+@router.get("/trends")
+def get_trends(db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/trends
+    Returns: item_trends (30/60/90 day), category_trends, seasonal_patterns, quadrant_drift
+    """
+    try:
+        cached = _get_cached("trends")
+        if cached:
+            return cached
+
+        result = calculate_trends(db)
+        _set_cached("trends", result)
+        return result
+    except Exception as e:
+        logger.exception("Error computing trends")
+        raise HTTPException(status_code=500, detail=f"Trend analysis failed: {e}")
+
+
+@router.get("/trends/wow-mom")
+def get_wow_mom(db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/trends/wow-mom
+    Returns: per-item week-over-week and month-over-month revenue changes
+    """
+    try:
+        return {"items": calculate_wow_mom(db)}
+    except Exception as e:
+        logger.exception("Error computing WoW/MoM")
+        raise HTTPException(status_code=500, detail=f"WoW/MoM analysis failed: {e}")
+
+
+@router.get("/trends/price-elasticity")
+def get_price_elasticity(db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/trends/price-elasticity
+    Returns: items where price changes were detected with elasticity estimates
+    """
+    try:
+        return {"items": estimate_price_elasticity(db)}
+    except Exception as e:
+        logger.exception("Error estimating price elasticity")
+        raise HTTPException(status_code=500, detail=f"Price elasticity failed: {e}")
+
+
+# ── Advanced Analytics Endpoints ──
+
+@router.get("/analytics/cannibalization")
+def get_cannibalization(
+    db: Session = Depends(get_db),
+    days: int = Query(90, ge=30, le=365),
+):
+    """
+    GET /api/revenue/analytics/cannibalization
+    Returns: items where new additions are cannibalizing existing items
+    """
+    try:
+        return {"items": analyze_category_cannibalization(db, lookback_days=days)}
+    except Exception as e:
+        logger.exception("Error analyzing cannibalization")
+        raise HTTPException(status_code=500, detail=f"Cannibalization analysis failed: {e}")
+
+
+@router.get("/analytics/price-sensitivity")
+def get_price_sensitivity(db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/analytics/price-sensitivity
+    Returns: plowhorse items with price increase scenarios and projected impact
+    """
+    try:
+        return {"items": estimate_price_sensitivity(db)}
+    except Exception as e:
+        logger.exception("Error estimating price sensitivity")
+        raise HTTPException(status_code=500, detail=f"Price sensitivity failed: {e}")
+
+
+@router.get("/analytics/waste")
+def get_waste_analysis(
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=7, le=365),
+):
+    """
+    GET /api/revenue/analytics/waste
+    Returns: waste costs, void rates, top wasted ingredients, top voided items
+    """
+    try:
+        return analyze_waste_and_voids(db, days=days)
+    except Exception as e:
+        logger.exception("Error analyzing waste")
+        raise HTTPException(status_code=500, detail=f"Waste analysis failed: {e}")
+
+
+@router.get("/analytics/customer-returns")
+def get_customer_returns(
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=7, le=365),
+):
+    """
+    GET /api/revenue/analytics/customer-returns
+    Returns: estimated repeat customer rates based on table patterns
+    """
+    try:
+        return estimate_customer_return_rate(db, days=days)
+    except Exception as e:
+        logger.exception("Error estimating customer returns")
+        raise HTTPException(status_code=500, detail=f"Customer return analysis failed: {e}")
+
+
+@router.get("/analytics/menu-complexity")
+def get_menu_complexity(db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/analytics/menu-complexity
+    Returns: per-category complexity scores and alerts when >7 items
+    """
+    try:
+        return {"categories": calculate_menu_complexity(db)}
+    except Exception as e:
+        logger.exception("Error computing menu complexity")
+        raise HTTPException(status_code=500, detail=f"Menu complexity failed: {e}")
+
+
+@router.get("/analytics/operational")
+def get_operational_metrics(
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=7, le=365),
+):
+    """
+    GET /api/revenue/analytics/operational
+    Returns: AOV, peak hours, orders by type, total stats
+    """
+    try:
+        return calculate_operational_metrics(db, days=days)
+    except Exception as e:
+        logger.exception("Error computing operational metrics")
+        raise HTTPException(status_code=500, detail=f"Operational metrics failed: {e}")

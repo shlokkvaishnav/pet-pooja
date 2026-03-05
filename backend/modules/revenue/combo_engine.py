@@ -8,7 +8,10 @@ profitable combo suggestions with association rules.
 Supports:
 - Sliding window (last N orders) for trend relevance
 - DB caching via ComboSuggestion table
-- Automatic retraining when enough new orders arrive
+- On-demand or nightly retraining (not on every request)
+- Stock-aware filtering — out-of-stock items excluded
+- Category-aware combo validation (main+side+drink preferred)
+- Configurable discount percentage
 - Fallback pair counting when mlxtend is unavailable
 """
 
@@ -21,11 +24,20 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 from mlxtend.frequent_patterns import fpgrowth, association_rules
 
-from models import MenuItem, SaleTransaction, ComboSuggestion
+from models import MenuItem, SaleTransaction, ComboSuggestion, Category
 
 # Thread-safe tracking of training state
 _train_lock = threading.Lock()
 _last_trained_order_count = 0
+
+# Category groups for combo validation (Indian restaurant structure)
+_COMBO_CATEGORY_GROUPS = {
+    "main": {"Main Course", "Mains", "Biryani", "Rice", "Thali"},
+    "bread": {"Breads", "Roti", "Naan"},
+    "side": {"Starters", "Appetizers", "Sides", "Salads", "Raita"},
+    "drink": {"Beverages", "Drinks", "Juices", "Lassi"},
+    "dessert": {"Desserts", "Sweets"},
+}
 
 logger = logging.getLogger("petpooja.revenue.combo")
 
@@ -39,12 +51,14 @@ def generate_combos(
     window_size: int = 500,
     update_threshold: int = 50,
     target_discount_pct: float = 10.0,
+    force_retrain: bool = False,
 ) -> list[dict]:
     """
     Generate combo suggestions using FP-Growth + association rules.
 
     Uses a sliding window over recent orders and caches results in the
-    ComboSuggestion table. Only retrains when enough new orders arrive.
+    ComboSuggestion table. Retrains on-demand (force_retrain=True) or
+    when enough new orders accumulate since last training.
 
     Args:
         db: Database session
@@ -54,7 +68,8 @@ def generate_combos(
         max_combos: Maximum combos to return
         window_size: Number of recent orders to analyze
         update_threshold: Retrain after this many new orders
-        target_discount_pct: Bundle discount percentage
+        target_discount_pct: Default bundle discount percentage (configurable)
+        force_retrain: If True, retrain regardless of threshold
 
     Returns:
         List of combo dicts with item names, confidence, lift, cm_gain, bundle price
@@ -69,14 +84,15 @@ def generate_combos(
 
     with _train_lock:
         needs_training = (
-            existing_combos_count == 0
+            force_retrain
+            or existing_combos_count == 0
             or total_orders >= _last_trained_order_count + update_threshold
         )
 
         if needs_training and total_orders > 0:
             logger.info(
-                "Training Combo ML Model (orders: %d, window: %d)",
-                total_orders, window_size,
+                "Training Combo ML Model (orders: %d, window: %d, forced: %s)",
+                total_orders, window_size, force_retrain,
             )
             _run_ml_pipeline(
                 db,
@@ -89,7 +105,7 @@ def generate_combos(
             )
             _last_trained_order_count = total_orders
 
-    # 2. Return cached combos from the database
+    # 2. Return cached combos from the database, filtering out-of-stock items
     return _fetch_combos_from_db(db)
 
 
@@ -126,8 +142,10 @@ def _run_ml_pipeline(
             MenuItem.name,
             MenuItem.selling_price,
             MenuItem.food_cost,
+            Category.name.label("category_name"),
         )
         .join(MenuItem, SaleTransaction.item_id == MenuItem.id)
+        .outerjoin(Category, MenuItem.category_id == Category.id)
         .join(
             recent_order_ids_subquery,
             SaleTransaction.order_id == recent_order_ids_subquery.c.order_id,
@@ -143,7 +161,7 @@ def _run_ml_pipeline(
     baskets: dict[str, set] = {}
     item_info: dict[str, dict] = {}
 
-    for order_id, item_id, name, price, cost in transactions_raw:
+    for order_id, item_id, name, price, cost, category_name in transactions_raw:
         baskets.setdefault(order_id, set()).add(name)
         if name not in item_info:
             cm = price - cost
@@ -155,6 +173,7 @@ def _run_ml_pipeline(
                 "cost": cost,
                 "cm": round(cm, 2),
                 "cm_pct": round(cm_pct, 1),
+                "category": category_name or "Uncategorized",
             }
 
     logger.info(
@@ -226,11 +245,16 @@ def _run_ml_pipeline(
 
         # --- ML Prediction Engine: Dynamic Combo Pricing & Scoring ---
         avg_cm_consequent = consequent_info["cm_pct"]
-        # AI Score weighting: affinity (lift) + profitability (cm_pct) + reliability (confidence)
-        combo_score = (lift * 1.5) * avg_cm_consequent * (confidence * 2.0)
 
+        # Category diversity bonus: prefer cross-category combos
         all_names = antecedents + consequents
         all_infos = antecedent_infos + [consequent_info]
+        item_categories = [info.get("category", "") for info in all_infos]
+        diversity_mult = _score_category_diversity(item_categories)
+
+        # AI Score weighting: affinity × profitability × reliability × diversity
+        combo_score = (lift * 1.5) * avg_cm_consequent * (confidence * 2.0) * diversity_mult
+
         individual_total = sum(info["price"] for info in all_infos)
         total_cost = sum(info["cost"] for info in all_infos)
         
@@ -320,20 +344,41 @@ def _save_combos_to_db(db: Session, combos: list[dict]):
 
 
 def _fetch_combos_from_db(db: Session) -> list[dict]:
-    """Retrieve cached combos from the database."""
+    """Retrieve cached combos from the database, filtering out those with out-of-stock items."""
     db_combos = (
         db.query(ComboSuggestion)
         .order_by(desc(ComboSuggestion.combo_score))
         .all()
     )
 
+    # Build stock lookup: items with current_stock == 0 are out of stock
+    # current_stock == None means unlimited
+    oos_ids = set()
+    oos_items = (
+        db.query(MenuItem.id)
+        .filter(MenuItem.current_stock == 0, MenuItem.is_available == True)
+        .all()
+    )
+    for (item_id,) in oos_items:
+        oos_ids.add(item_id)
+
     result = []
     for i, c in enumerate(db_combos):
+        # Skip combos containing out-of-stock items
+        if any(iid in oos_ids for iid in (c.item_ids or [])):
+            continue
+
         margin_pct = (
             round((c.expected_margin / c.combo_price) * 100, 1)
             if c.combo_price and c.combo_price > 0
             else 0
         )
+
+        # Determine category diversity for combo quality indicator
+        item_categories = _get_item_categories(db, c.item_ids or [])
+        category_groups = _classify_category_groups(item_categories)
+        combo_structure = "diverse" if len(category_groups) >= 2 else "same-category"
+
         result.append({
             "combo_id": f"COMBO-{i + 1:03d}",
             "name": c.name,
@@ -354,9 +399,58 @@ def _fetch_combos_from_db(db: Session) -> list[dict]:
             "confidence": round(c.confidence, 4) if c.confidence else 0.0,
             "lift": round(c.lift, 4) if c.lift else 0.0,
             "combo_score": round(c.combo_score, 2) if c.combo_score else 0.0,
+            "combo_structure": combo_structure,
+            "category_groups": list(category_groups),
         })
 
     return result
+
+
+# -- Category helpers ------------------------------------------------------
+
+def _get_item_categories(db: Session, item_ids: list[int]) -> list[str]:
+    """Get category names for a list of item IDs."""
+    if not item_ids:
+        return []
+    items = (
+        db.query(MenuItem.id, Category.name)
+        .join(Category, MenuItem.category_id == Category.id)
+        .filter(MenuItem.id.in_(item_ids))
+        .all()
+    )
+    return [cat_name for _, cat_name in items]
+
+
+def _classify_category_groups(category_names: list[str]) -> set[str]:
+    """Map category names to abstract groups (main, bread, side, drink, dessert)."""
+    groups = set()
+    for cat_name in category_names:
+        for group, cat_set in _COMBO_CATEGORY_GROUPS.items():
+            if cat_name in cat_set:
+                groups.add(group)
+                break
+        else:
+            groups.add("other")
+    return groups
+
+
+def _score_category_diversity(category_names: list[str]) -> float:
+    """
+    Score combo category diversity. A combo with items from different
+    category groups (e.g., main + bread + drink) scores higher than
+    combos with items from the same group (e.g., two desserts).
+
+    Returns a multiplier: 1.0 (same category) to 1.5 (ideal diverse combo).
+    """
+    groups = _classify_category_groups(category_names)
+    n_groups = len(groups)
+
+    if n_groups >= 3:
+        return 1.5  # Ideal: main + side/bread + drink
+    elif n_groups == 2:
+        return 1.2  # Good: two different groups
+    else:
+        return 0.8  # Penalize: same category (e.g., two desserts)
 
 
 # -- Fallback (pair counting) ----------------------------------------------
