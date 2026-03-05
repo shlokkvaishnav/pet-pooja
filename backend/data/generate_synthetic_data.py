@@ -1,28 +1,35 @@
 """
-seed_data.py — Comprehensive Data Generator
-================================================
-Generates 60 menu items and 180 days of realistic
-sales data with co-occurrence patterns, time-of-day
-spikes, and weekend volume multipliers.
+generate_synthetic_data.py — Supabase Synthetic Data Generator
+================================================================
+Generates 60 menu items across 6 categories and 180 days of
+realistic sales data with co-occurrence patterns, then inserts
+everything into the Supabase PostgreSQL database.
 
 Usage:
     cd backend
-    python data/seed_data.py
+    python data/generate_synthetic_data.py
+
+Supports:
+    --reset    Drop and recreate all tables first
+    --days N   Number of days of history (default: 180)
 """
 
 import json
 import random
 import sys
 import uuid
-from datetime import datetime, timedelta
+import argparse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Add parent dir to path so we can import database/models
+# Add parent dir so we can import database/models
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import engine, Base, SessionLocal
 from models import Category, MenuItem, SaleTransaction
 
+
+# ── Helpers ──────────────────────────────────────
 
 def load_sample_menu() -> dict:
     """Load the base menu JSON."""
@@ -31,8 +38,14 @@ def load_sample_menu() -> dict:
         return json.load(f)
 
 
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
+# ── Phase 1: Categories ─────────────────────────
+
 def seed_categories(db, categories_data: list) -> dict:
-    """Insert categories and return name → id map."""
+    """Insert categories, return name → id map."""
     cat_map = {}
     for idx, cat in enumerate(categories_data):
         obj = Category(
@@ -44,11 +57,14 @@ def seed_categories(db, categories_data: list) -> dict:
         db.add(obj)
         db.flush()
         cat_map[cat["name"]] = obj.id
+    db.commit()
     return cat_map
 
 
+# ── Phase 2: Menu Items ─────────────────────────
+
 def seed_menu_items(db, items_data: list, cat_map: dict) -> list:
-    """Insert menu items and return list of MenuItem objects."""
+    """Insert menu items, return list of MenuItem objects."""
     items = []
     for item_data in items_data:
         obj = MenuItem(
@@ -67,31 +83,27 @@ def seed_menu_items(db, items_data: list, cat_map: dict) -> list:
         db.add(obj)
         db.flush()
         items.append(obj)
+    db.commit()
     return items
 
 
-# ── Co-occurrence pattern definitions ──
+# ── Phase 3: Synthetic Sales Data ───────────────
 
 def _build_name_index(items: list) -> dict:
-    """Build name → MenuItem index for lookup."""
     return {item.name.lower(): item for item in items}
 
 
 def _get_biryani_items(items: list) -> list:
-    """Get all biryani items from menu."""
     return [i for i in items if "biryani" in i.name.lower()]
 
 
 def _get_cold_drink_items(items: list) -> list:
-    """Get cold drink / beverage items that pair with biryani."""
     cold_names = {"cold drink", "sweet lassi", "buttermilk", "jaljeera", "fresh lime soda"}
     return [i for i in items if i.name.lower() in cold_names]
 
 
 def _pick_time_of_day() -> int:
-    """Pick hour weighted by realistic restaurant traffic patterns.
-    Lunch spike: 12–3 PM, Dinner spike: 7–10 PM, light otherwise.
-    """
+    """Weighted hour: lunch 12–3, dinner 7–10, light otherwise."""
     weights = {
         11: 5, 12: 15, 13: 20, 14: 15, 15: 8,
         16: 3, 17: 4, 18: 6,
@@ -104,51 +116,65 @@ def _pick_time_of_day() -> int:
 
 def seed_sales(db, items: list, num_days: int = 180, base_orders_per_day: int = 110):
     """
-    Generate realistic sales transactions with:
-    - 180 days of history
-    - 80–150 orders per day
-    - Weekend volume = 1.5× weekday
+    Generate realistic sales transactions:
+    - 80–150 orders/day (base 110, ±35%)
+    - Weekend 1.5× volume
+    - Butter Naan + Dal Makhani co-occurrence ~70%
+    - Cold Drink + any Biryani co-occurrence ~60%
     - Lunch (12–3) and dinner (7–10) spikes
-    - Butter Naan + Dal Makhani co-occurrence in ~70% of orders
-    - Cold Drink + Biryani co-occurrence in ~60% of orders
     """
     order_types = ["dine_in", "takeaway", "delivery"]
     type_weights = [0.55, 0.25, 0.20]
     order_counter = 0
 
-    # Build lookup indexes
     name_idx = _build_name_index(items)
     biryani_items = _get_biryani_items(items)
     cold_drink_items = _get_cold_drink_items(items)
 
-    # Key items for co-occurrence
     butter_naan = name_idx.get("butter naan")
     dal_makhani = name_idx.get("dal makhani")
 
-    # Popularity weights — bestsellers ordered 3x more, cheap items more frequent
+    # Popularity weights — aligned with BCG quadrant targets
+    # BCG classifier uses margin_threshold=60% and popularity_threshold=0.4
+    # Score = item_qty / max_qty, so items targeting "high pop" need >= 40% of max
+    #
+    # Target distribution:
+    #   star      (margin>=60%, high pop)  — bestsellers with high margins
+    #   plowhorse (margin<60%,  high pop)  — workhorses / cheap favourites
+    #   puzzle    (margin>=60%, low pop)   — hidden stars
+    #   dog       (margin<60%,  low pop)   — low margin, low traffic
     item_weights = []
     for item in items:
-        weight = 3.0 if item.is_bestseller else 1.0
-        if item.selling_price < 100:
-            weight *= 1.5
-        elif item.selling_price > 350:
-            weight *= 0.6
-        # Hidden stars get deliberately LOW weight (high margin, low sales)
-        if item.margin_pct >= 65 and not item.is_bestseller:
-            weight *= 0.4
+        margin = item.margin_pct
+        if margin >= 60 and item.is_bestseller:
+            # → star: high pop, high margin — heaviest weight
+            weight = random.uniform(5.0, 7.0)
+        elif margin >= 60 and not item.is_bestseller:
+            # → puzzle: low pop, high margin — suppress sales
+            weight = random.uniform(0.25, 0.55)
+        elif margin < 60 and item.is_bestseller:
+            # → plowhorse: high pop, low margin
+            weight = random.uniform(4.0, 6.0)
+        elif margin >= 40:
+            # workhorses (40-60%) — most should become plowhorses (high pop)
+            weight = random.uniform(3.0, 5.0)
+        else:
+            # dogs (<40% margin) — keep low pop
+            weight = random.uniform(0.2, 0.5)
         item_weights.append(weight)
 
     total_weight = sum(item_weights)
     item_probs = [w / total_weight for w in item_weights]
 
-    now = datetime.utcnow()
+    now = _utcnow()
     total_sales = 0
+    batch = []
+    BATCH_SIZE = 5000
 
     for day_offset in range(num_days):
         date = now - timedelta(days=day_offset)
-        is_weekend = date.weekday() >= 5  # Sat=5, Sun=6
+        is_weekend = date.weekday() >= 5
 
-        # Weekend gets 1.5x orders
         day_multiplier = 1.5 if is_weekend else 1.0
         day_orders = random.randint(
             int(base_orders_per_day * 0.75 * day_multiplier),
@@ -161,36 +187,31 @@ def seed_sales(db, items: list, num_days: int = 180, base_orders_per_day: int = 
             order_type = random.choices(order_types, weights=type_weights, k=1)[0]
             hour = _pick_time_of_day()
 
-            # Base order: 2–5 items
             num_items = random.randint(2, 5)
             ordered_items = set()
 
-            # Random base items
             base = random.choices(items, weights=item_probs, k=num_items)
             for item in base:
                 ordered_items.add(item)
 
-            # ── CO-OCCURRENCE PATTERN 1: Butter Naan + Dal Makhani (70%) ──
+            # Co-occurrence 1: Butter Naan + Dal Makhani (70%)
             if butter_naan and dal_makhani:
                 if random.random() < 0.70:
                     ordered_items.add(butter_naan)
                     ordered_items.add(dal_makhani)
 
-            # ── CO-OCCURRENCE PATTERN 2: Cold Drink + Biryani (60%) ──
+            # Co-occurrence 2: Cold Drink + Biryani (60%)
             ordered_biryani = [i for i in ordered_items if i in biryani_items]
             if ordered_biryani and cold_drink_items:
                 if random.random() < 0.60:
                     ordered_items.add(random.choice(cold_drink_items))
             elif biryani_items and cold_drink_items:
-                # Even if no biryani initially, sometimes add the pair
                 if random.random() < 0.15:
                     ordered_items.add(random.choice(biryani_items))
                     ordered_items.add(random.choice(cold_drink_items))
 
-            # Write sale transactions for this order
             for item in ordered_items:
                 qty = random.choices([1, 2, 3], weights=[0.70, 0.25, 0.05], k=1)[0]
-                # Slight price variation (discounts, rounding)
                 unit_price = item.selling_price * random.uniform(0.95, 1.0)
 
                 sale = SaleTransaction(
@@ -206,30 +227,61 @@ def seed_sales(db, items: list, num_days: int = 180, base_orders_per_day: int = 
                         second=random.randint(0, 59),
                     ),
                 )
-                db.add(sale)
+                batch.append(sale)
                 total_sales += 1
 
-        # Commit every 30 days to avoid huge memory usage
-        if day_offset % 30 == 29:
-            db.flush()
-            print(f"   ... {day_offset + 1}/{num_days} days generated ({order_counter} orders so far)")
+            # Flush in batches to keep memory low
+            if len(batch) >= BATCH_SIZE:
+                db.bulk_save_objects(batch)
+                db.flush()
+                batch.clear()
 
-    print(f"   Generated {order_counter} orders, {total_sales} sale transactions across {num_days} days")
+        if day_offset % 30 == 29:
+            if batch:
+                db.bulk_save_objects(batch)
+                db.flush()
+                batch.clear()
+            db.commit()
+            print(f"   ... {day_offset + 1}/{num_days} days ({order_counter:,} orders, {total_sales:,} sales)")
+
+    # Flush remaining
+    if batch:
+        db.bulk_save_objects(batch)
+    db.commit()
+
+    print(f"   Generated {order_counter:,} orders, {total_sales:,} sale transactions across {num_days} days")
     return order_counter, total_sales
 
 
+# ── Main ─────────────────────────────────────────
+
 def main():
-    print("🌱 Seeding Petpooja database...")
+    parser = argparse.ArgumentParser(description="Generate synthetic data for Petpooja")
+    parser.add_argument("--reset", action="store_true", help="Drop and recreate all tables")
+    parser.add_argument("--days", type=int, default=180, help="Days of order history (default: 180)")
+    args = parser.parse_args()
+
+    print("🌱 Generating synthetic data for Supabase...")
     print("=" * 60)
 
-    # Create all tables
-    Base.metadata.drop_all(bind=engine)
+    if args.reset:
+        print("⚠️  Dropping all tables...")
+        Base.metadata.drop_all(bind=engine)
+
+    # Create tables (idempotent — safe to run multiple times)
     Base.metadata.create_all(bind=engine)
-    print("✅ Tables created (fresh)")
+    print("✅ Tables verified/created on Supabase")
 
     db = SessionLocal()
 
     try:
+        # Check if data already exists
+        existing = db.query(MenuItem).count()
+        if existing > 0 and not args.reset:
+            print(f"⚠️  Database already has {existing} menu items.")
+            print("   Use --reset to drop and recreate. Skipping seed.")
+            return
+
         # Load menu
         menu_data = load_sample_menu()
 
@@ -251,17 +303,16 @@ def main():
         print(f"   CM% Distribution → Stars: {stars}, Hidden Stars: {hidden}, Workhorses: {workhorses}, Dogs: {dogs}")
 
         # Seed sales transactions
-        print("📊 Generating sales data (180 days)...")
-        n_orders, n_sales = seed_sales(db, items, num_days=180, base_orders_per_day=110)
+        print(f"📊 Generating {args.days} days of sales data...")
+        n_orders, n_sales = seed_sales(db, items, num_days=args.days, base_orders_per_day=110)
 
-        db.commit()
         print("=" * 60)
-        print("✅ Database seeded successfully!")
-        print(f"   Database: data/restaurant.db")
-        print(f"   Categories: {len(cat_map)}")
-        print(f"   Menu items: {len(items)}")
-        print(f"   Orders: ~{n_orders}")
-        print(f"   Sale transactions: ~{n_sales}")
+        print("✅ Supabase database populated successfully!")
+        print(f"   Categories:          {len(cat_map)}")
+        print(f"   Menu items:          {len(items)}")
+        print(f"   Orders:              ~{n_orders:,}")
+        print(f"   Sale transactions:   ~{n_sales:,}")
+        print(f"   Days of history:     {args.days}")
 
     except Exception as e:
         db.rollback()

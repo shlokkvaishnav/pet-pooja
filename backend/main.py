@@ -1,8 +1,7 @@
 """
 Petpooja AI Copilot — FastAPI Application Entry Point
 ======================================================
-No external APIs — everything runs locally.
-SQLite database, faster-whisper STT, rule-based NLP.
+Supabase PostgreSQL database, faster-whisper STT, rule-based NLP.
 """
 
 from contextlib import asynccontextmanager
@@ -17,18 +16,29 @@ from api.routes_voice import router as voice_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup."""
+    """Create database tables and load pipeline on startup."""
+    # Create all tables
     Base.metadata.create_all(bind=engine)
     print("🚀 Petpooja AI Copilot — Server ready")
     print("📊 Revenue engine loaded")
-    print("🎙️ Voice pipeline ready (faster-whisper)")
+
+    # Load voice pipeline into app.state for shared access
+    try:
+        from modules.voice.pipeline import process_voice_order
+        app.state.pipeline = process_voice_order
+        print("🎙️ Voice pipeline ready (faster-whisper)")
+    except Exception as e:
+        print(f"⚠️ Voice pipeline load warning: {e}")
+        print("   Voice endpoints will still work but may be slower on first call")
+        app.state.pipeline = None
+
     yield
     print("Server shutting down...")
 
 
 app = FastAPI(
     title="Petpooja AI Copilot",
-    description="Restaurant Revenue Intelligence & Voice Ordering — fully offline, no external APIs",
+    description="Restaurant Revenue Intelligence & Voice Ordering — Supabase PostgreSQL backend",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -48,7 +58,19 @@ app.include_router(voice_router, prefix="/api/voice", tags=["Voice"])
 
 @app.get("/api/health")
 def health():
-    return {"status": "healthy", "service": "petpooja-ai-copilot", "mode": "offline"}
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "service": "petpooja-ai-copilot",
+        "mode": "offline",
+        "pipeline_loaded": hasattr(app.state, "pipeline") and app.state.pipeline is not None,
+    }
+
+
+@app.get("/health")
+def health_root():
+    """Root health check (alias)."""
+    return health()
 
 
 if __name__ == "__main__":

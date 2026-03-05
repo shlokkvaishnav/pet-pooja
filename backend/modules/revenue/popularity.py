@@ -52,12 +52,22 @@ def calculate_popularity(db: Session, days: int = 30) -> list[dict]:
     items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
 
     results = []
-    max_qty = max((s["total_qty"] for s in sales_map.values()), default=1) or 1
+
+    # Robust normalization: use mean × 2 instead of max to handle
+    # co-occurrence outliers (e.g., Butter Naan appearing in 70% of orders).
+    # In menu engineering, "high popularity" means "above average", not
+    # "close to the single most popular item".
+    all_qtys = [s["total_qty"] for s in sales_map.values() if s["total_qty"] > 0]
+    if all_qtys:
+        mean_qty = sum(all_qtys) / len(all_qtys)
+        norm_qty = max(mean_qty * 2, 1)  # 2× mean as ceiling
+    else:
+        norm_qty = 1
 
     for item in items:
         sales = sales_map.get(item.id, {"total_qty": 0, "order_count": 0})
         daily_velocity = sales["total_qty"] / max(days, 1)
-        pop_score = sales["total_qty"] / max_qty
+        pop_score = min(sales["total_qty"] / norm_qty, 1.0)  # cap at 1.0
 
         # Tier classification
         if pop_score >= 0.6:

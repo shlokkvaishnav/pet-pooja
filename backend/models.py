@@ -1,11 +1,11 @@
 """
-models.py — SQLAlchemy ORM Models
-==================================
+models.py — SQLAlchemy ORM Models (Supabase PostgreSQL)
+=========================================================
 All database tables for menu items, categories, orders,
-sales transactions, and combos.
+order items, KOTs, sales transactions, and combos.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column,
@@ -23,6 +23,10 @@ from sqlalchemy.orm import relationship
 from database import Base
 
 
+def _utcnow():
+    return datetime.now(timezone.utc)
+
+
 class Category(Base):
     """Menu category (e.g., Starters, Main Course, Beverages)."""
 
@@ -38,7 +42,7 @@ class Category(Base):
 
 
 class MenuItem(Base):
-    """Individual menu item with pricing and cost data."""
+    """Individual menu item with pricing, cost data, aliases and modifiers."""
 
     __tablename__ = "menu_items"
 
@@ -46,14 +50,17 @@ class MenuItem(Base):
     name = Column(String(200), nullable=False)
     name_hi = Column(String(200))  # Hindi name
     description = Column(Text)
+    aliases = Column(Text, default="")  # pipe-separated: "pnr tikka|panir tikka|tikka paneer"
     category_id = Column(Integer, ForeignKey("categories.id"))
     selling_price = Column(Float, nullable=False)
     food_cost = Column(Float, nullable=False)
+    modifiers = Column(JSON, default=dict)  # {"spice_level": [...], "size": [...], "add_ons": [...]}
     is_veg = Column(Boolean, default=True)
     is_available = Column(Boolean, default=True)
     is_bestseller = Column(Boolean, default=False)
+    current_stock = Column(Integer, nullable=True)  # None = unlimited
     tags = Column(JSON, default=list)  # ["spicy", "chef-special", etc.]
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     category = relationship("Category", back_populates="items")
     sales = relationship("SaleTransaction", back_populates="item")
@@ -81,7 +88,7 @@ class SaleTransaction(Base):
     unit_price = Column(Float, nullable=False)
     total_price = Column(Float, nullable=False)
     order_type = Column(String(20), default="dine_in")  # dine_in | takeaway | delivery
-    sold_at = Column(DateTime, default=datetime.utcnow)
+    sold_at = Column(DateTime, default=_utcnow)
 
     item = relationship("MenuItem", back_populates="sales")
 
@@ -93,14 +100,49 @@ class Order(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(String(50), unique=True, nullable=False)
-    items = Column(JSON, default=list)  # [{item_id, name, qty, price, modifiers}]
-    total = Column(Float, default=0.0)
+    order_number = Column(String(20))  # Human-readable order number
+    total_amount = Column(Float, default=0.0)
     status = Column(String(20), default="building")  # building | confirmed | cancelled
     order_type = Column(String(20), default="dine_in")
     table_number = Column(String(10))
     source = Column(String(20), default="voice")  # voice | manual
-    created_at = Column(DateTime, default=datetime.utcnow)
-    confirmed_at = Column(DateTime)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    order_items = relationship("OrderItem", back_populates="order")
+    kots = relationship("KOT", back_populates="order")
+
+
+class OrderItem(Base):
+    """Individual item within an order."""
+
+    __tablename__ = "order_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(String(50), ForeignKey("orders.order_id"), nullable=False)
+    item_id = Column(Integer, ForeignKey("menu_items.id"), nullable=False)
+    quantity = Column(Integer, default=1)
+    unit_price = Column(Float, nullable=False)
+    modifiers_applied = Column(JSON, default=dict)  # {"spice_level": "hot", ...}
+    line_total = Column(Float, nullable=False)
+
+    order = relationship("Order", back_populates="order_items")
+    menu_item = relationship("MenuItem")
+
+
+class KOT(Base):
+    """Kitchen Order Ticket — sent to kitchen after order confirmation."""
+
+    __tablename__ = "kots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kot_id = Column(String(50), unique=True, nullable=False)  # KOT-YYYYMMDD-XXXX
+    order_id = Column(String(50), ForeignKey("orders.order_id"), nullable=False)
+    items_summary = Column(JSON, nullable=False)  # [{name, qty, modifiers}]
+    print_ready = Column(Text)  # Plain-text kitchen-friendly format
+    created_at = Column(DateTime, default=_utcnow)
+
+    order = relationship("Order", back_populates="kots")
 
 
 class ComboSuggestion(Base):
@@ -118,4 +160,6 @@ class ComboSuggestion(Base):
     expected_margin = Column(Float)
     support = Column(Float)  # Association rule support
     confidence = Column(Float)  # Association rule confidence
-    created_at = Column(DateTime, default=datetime.utcnow)
+    lift = Column(Float)  # Association rule lift
+    combo_score = Column(Float)  # lift × avg_cm × confidence
+    created_at = Column(DateTime, default=_utcnow)
