@@ -1,114 +1,72 @@
 """
-modifier_extractor.py — Spice/Size/Add-on Extraction
+modifier_extractor.py — Per-item Modifier Extraction
 ======================================================
-Extracts modifiers from natural language:
-- Spice level (mild, medium, spicy, extra spicy)
-- Size (half, full, regular, large)
-- Add-ons (extra cheese, no onion, less oil)
+Modifier PATTERNS are linguistic (common across all restaurants).
+But allowed modifiers per item are loaded DYNAMICALLY from DB.
 """
 
 import re
+import json
 
-
-# Modifier patterns
-SPICE_LEVELS = {
-    "mild": ["mild", "kam teekha", "halka", "light spice", "कम तीखा"],
-    "medium": ["medium", "normal", "regular spice", "thoda teekha"],
-    "spicy": ["spicy", "teekha", "mirchi", "तीखा", "hot"],
-    "extra_spicy": ["extra spicy", "bohot teekha", "bahut teekha", "बहुत तीखा", "very spicy"],
-}
-
-SIZE_MODIFIERS = {
-    "half": ["half", "aadha", "आधा", "half plate"],
-    "full": ["full", "poora", "पूरा", "full plate"],
-    "regular": ["regular", "normal"],
-    "large": ["large", "bada", "बड़ा", "extra large"],
-}
-
-ADD_ONS = {
-    "extra_cheese": ["extra cheese", "cheese extra", "zyada cheese"],
-    "no_onion": ["no onion", "bina pyaaz", "without onion", "बिना प्याज़"],
-    "no_garlic": ["no garlic", "bina lahsun", "without garlic"],
-    "less_oil": ["less oil", "kam tel", "कम तेल", "light oil"],
-    "extra_butter": ["extra butter", "zyada butter", "butter extra"],
-    "no_cream": ["no cream", "bina cream", "without cream"],
-    "extra_gravy": ["extra gravy", "zyada gravy", "more gravy"],
-    "dry": ["dry", "sukha", "सूखा", "without gravy"],
-}
-
-SPECIAL_INSTRUCTIONS = {
-    "jaldi": "Prepare quickly / rush order",
-    "pack": "Pack for takeaway",
-    "parcel": "Pack for takeaway",
-    "jain": "Jain preparation (no onion/garlic/root vegs)",
-    "sugar_free": "No sugar",
+# Linguistic patterns — common across all restaurants
+MODIFIER_PATTERNS = {
+    "spice_level": {
+        "mild":   [r"\b(mild|no spice|bina mirch|kam teekha|less spicy|not spicy)\b"],
+        "medium": [r"\b(medium|normal|theek|regular spice)\b"],
+        "hot":    [r"\b(spicy|extra spicy|zyada teekha|hot|tez|bahut teekha|very spicy)\b"],
+    },
+    "size": {
+        "small":  [r"\b(small|chota|half|chhota)\b"],
+        "large":  [r"\b(large|bada|full|double|bara)\b"],
+    },
+    "add_ons": {
+        "no_onion":      [r"\b(no onion|bina pyaz|without onion|pyaz mat)\b"],
+        "no_garlic":     [r"\b(no garlic|bina lehsun|jain|without garlic)\b"],
+        "extra_butter":  [r"\b(extra butter|zyada butter|more butter|butter add)\b"],
+        "extra_cheese":  [r"\b(extra cheese|cheese add|zyada cheese)\b"],
+        "no_sauce":      [r"\b(no sauce|bina sauce|dry)\b"],
+    }
 }
 
 
-def extract_modifiers(text: str, items: list[dict]) -> list[dict]:
+def extract_modifiers(text: str, item_id: int, menu_items: list) -> dict:
     """
-    Extract modifiers from text and attach to each item.
-
-    Args:
-        text: Normalized text
-        items: Matched items with quantities
-
-    Returns:
-        Items with 'modifiers' field added
+    Extracts modifiers from transcript for a specific item.
+    Cross-checks against item's allowed modifiers FROM THE DB.
     """
-    text_lower = text.lower()
+    text = text.lower()
 
-    # Global modifiers (apply to all items if not item-specific)
-    global_spice = _detect_spice(text_lower)
-    global_size = _detect_size(text_lower)
-    global_addons = _detect_addons(text_lower)
-    special = _detect_special(text_lower)
+    # DYNAMIC: Get allowed modifiers for this item from DB
+    item = next((m for m in menu_items if m.id == item_id), None)
+    allowed_modifiers = {}
+    if item and hasattr(item, "modifiers") and item.modifiers:
+        try:
+            allowed_modifiers = json.loads(item.modifiers)
+        except Exception:
+            allowed_modifiers = {}
 
-    for item in items:
-        modifiers = {
-            "spice_level": global_spice,
-            "size": global_size,
-            "add_ons": global_addons.copy(),
-            "special_instructions": special,
-        }
-        item["modifiers"] = modifiers
+    result = {"spice_level": None, "size": None, "add_ons": []}
 
-    return items
-
-
-def _detect_spice(text: str) -> str:
-    """Detect spice level from text."""
-    for level, keywords in SPICE_LEVELS.items():
-        for kw in keywords:
-            if kw in text:
-                return level
-    return "medium"  # default
-
-
-def _detect_size(text: str) -> str:
-    """Detect size modifier from text."""
-    for size, keywords in SIZE_MODIFIERS.items():
-        for kw in keywords:
-            if kw in text:
-                return size
-    return "regular"  # default
-
-
-def _detect_addons(text: str) -> list[str]:
-    """Detect add-on modifiers from text."""
-    addons = []
-    for addon_key, keywords in ADD_ONS.items():
-        for kw in keywords:
-            if kw in text:
-                addons.append(addon_key)
+    # Spice level — most items accept spice preference
+    for level, patterns in MODIFIER_PATTERNS["spice_level"].items():
+        for pattern in patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                result["spice_level"] = level
                 break
-    return addons
 
+    # Size — only if item supports it (checked from DB)
+    if "size" in allowed_modifiers:
+        for size, patterns in MODIFIER_PATTERNS["size"].items():
+            for pattern in patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    result["size"] = size
+                    break
 
-def _detect_special(text: str) -> str:
-    """Detect special instructions from text."""
-    instructions = []
-    for keyword, instruction in SPECIAL_INSTRUCTIONS.items():
-        if keyword in text:
-            instructions.append(instruction)
-    return "; ".join(instructions) if instructions else ""
+    # Add-ons
+    for add_on, patterns in MODIFIER_PATTERNS["add_ons"].items():
+        for pattern in patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                if add_on not in result["add_ons"]:
+                    result["add_ons"].append(add_on)
+
+    return result

@@ -1,33 +1,30 @@
-# ─── Petpooja AI Copilot — Backend Dependencies ───
+# --- Petpooja AI Copilot -- Backend Dependencies ---
 # All local, no external API SDKs needed
 
 # Web framework
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-python-multipart==0.0.20
+fastapi
+uvicorn[standard]
+python-multipart
 
 # Database
-sqlalchemy==2.0.36
+sqlalchemy
+psycopg2-binary
 
 # Data processing
-pandas==2.2.3
-numpy==2.2.1
+pandas
+numpy
 
-# Association rule mining (combo engine)
-mlxtend==0.23.2
+# Association rule mining (combo engine - Person D)
+mlxtend
 
-# Voice — local STT
-faster-whisper==1.1.0
+# Voice -- local STT (runs Whisper on your CPU, no API)
+faster-whisper
 
-# Fuzzy text matching
-rapidfuzz==3.11.0
-
-# Hindi/Hinglish text processing
-indic-transliteration==2.4.1
+# Fuzzy text matching (Person B - item matching)
+rapidfuzz
 
 # Audio handling
-soundfile==0.13.1
-pydub==0.25.1
+pydub
 
 # Utilities
-python-dotenv==1.0.1
+python-dotenv

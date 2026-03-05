@@ -1,105 +1,144 @@
 """
-normalizer.py — Hindi/Hinglish Text Normalization
-===================================================
-Cleans and normalizes transcribed text for better
-intent parsing and menu item matching.
+normalizer.py — Text Normalization for Hindi/Hinglish/Gujarati/Marathi
+=======================================================================
+Supports: English, Hindi, Hinglish, Gujarati, Marathi
+Only LINGUISTIC patterns are hardcoded (numbers, fillers).
+Food/menu data comes from the DATABASE via item_matcher.
 """
 
 import re
-import unicodedata
 
-
-# Common Hindi/Hinglish food-related corrections
-CORRECTIONS = {
-    # English misspellings
-    "panner": "paneer",
-    "panneer": "paneer",
-    "panir": "paneer",
-    "naan": "naan",
-    "nan": "naan",
-    "roti": "roti",
-    "rotee": "roti",
-    "biryani": "biryani",
-    "biriyani": "biryani",
-    "bryani": "biryani",
-    "daal": "dal",
-    "dhal": "dal",
-    "chiken": "chicken",
-    "chikn": "chicken",
-    "muton": "mutton",
-    "matton": "mutton",
-    "gobhi": "gobi",
-
-    # Hinglish transliteration variants
-    "ek": "1",
-    "do": "2",
-    "teen": "3",
-    "char": "4",
-    "paanch": "5",
-
-    # Common ordering phrases
-    "dedo": "de do",
-    "dedijiye": "de dijiye",
-    "chahiye": "chahiye",
-    "lagado": "laga do",
-    "bana do": "bana do",
-    "aur": "and",
-}
-
-# Noise words to remove (filler words from speech)
-NOISE_WORDS = {
-    "umm", "uh", "hmm", "aa", "aah", "err", "like",
-    "actually", "basically", "so", "well", "you know",
+# ---------------------------------------------------------------------------
+# Devanagari -> Romanized transliteration map (common restaurant words)
+# Applied BEFORE number/filler processing so downstream stays Latin-script.
+# ---------------------------------------------------------------------------
+DEVANAGARI_MAP = {
+    # Numbers
+    "एक": "ek", "दो": "do", "तीन": "teen", "चार": "char",
+    "पांच": "paanch", "पाँच": "paanch", "छह": "chhe", "छे": "chhe",
+    "सात": "saat", "आठ": "aath", "नौ": "nau", "दस": "das",
+    "ग्यारह": "gyarah", "बारह": "barah", "बीस": "bees",
+    # Common ordering words
+    "और": "aur", "या": "ya", "भी": "bhi",
+    "दे": "de", "देना": "dena", "दो": "do",  # context: "give" vs "two" handled below
+    "लाओ": "lao", "चाहिए": "chahiye", "चाहिये": "chahiye",
+    "कृपया": "please", "प्लीज": "please",
+    # Common fillers
+    "भैया": "bhaiya", "भइया": "bhaiya", "भाई": "bhai",
+    "यार": "yaar", "बॉस": "boss", "जी": "ji",
+    "अच्छा": "accha", "ठीक": "theek", "हाँ": "haan", "हां": "haan",
+    # Modifiers
+    "एक्स्ट्रा": "extra", "बिना": "bina", "स्पाइसी": "spicy",
+    "ज़्यादा": "zyada", "कम": "kam",
+    # Common food words (helps fuzzy matching after transliteration)
+    "पनीर": "paneer", "टिक्का": "tikka", "बटर": "butter",
+    "नान": "naan", "रोटी": "roti", "चिकन": "chicken",
+    "बिरयानी": "biryani", "दाल": "dal", "मसाला": "masala",
+    "लस्सी": "lassi", "चाय": "chai", "गुलाब": "gulab",
+    "जामुन": "jamun", "मखनी": "makhani", "मक्खनी": "makhani",
+    "तंदूरी": "tandoori", "तन्दूरी": "tandoori",
+    "पालक": "palak", "शाही": "shahi", "कड़ाही": "kadhai",
+    "मटन": "mutton", "गोश्त": "gosht", "मछली": "fish",
+    "आलू": "aloo", "गोभी": "gobhi", "भिंडी": "bhindi",
+    "राइस": "rice", "चावल": "chawal", "खीर": "kheer",
+    "रसमलाई": "rasmalai", "कुल्फी": "kulfi",
+    "कोल्ड": "cold", "ड्रिंक": "drink", "पानी": "pani",
+    "मशरूम": "mushroom", "केबाब": "kebab", "कबाब": "kebab",
+    "रायता": "raita", "सलाद": "salad",
 }
 
 
-def normalize_text(text: str) -> str:
+def _transliterate_devanagari(text: str) -> str:
+    """Replace Devanagari tokens with romanized equivalents."""
+    for dev, roman in DEVANAGARI_MAP.items():
+        text = text.replace(dev, roman)
+    # Drop any remaining Devanagari characters (U+0900-U+097F)
+    text = re.sub(r"[\u0900-\u097F]+", " ", text)
+    return text
+
+
+# Number words -> integer
+# Covers Hindi, Gujarati, Marathi romanized variants
+NUMBER_WORDS = {
+    # Hindi / Hinglish
+    "ek": 1, "ak": 1,
+    "do": 2, "dono": 2, "dou": 2,
+    "teen": 3, "tin": 3,
+    "char": 4, "chaar": 4,
+    "paanch": 5, "panch": 5,
+    "chhe": 6, "chheh": 6,
+    "saat": 7, "sat": 7,
+    "aath": 8, "ath": 8,
+    "nau": 9, "naw": 9,
+    "das": 10,
+    "gyarah": 11,
+    "barah": 12,
+    "tera": 13,
+    "chaudah": 14,
+    "pandrah": 15,
+    "bees": 20,
+
+    # Gujarati romanized
+    "be": 2,
+    "tran": 3,
+    "chha": 6,
+    "nav": 9,
+
+    # Marathi romanized
+    "don": 2,
+    "paach": 5,
+    "saha": 6,
+    "daha": 10,
+
+    # English number words
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+# Conversational filler words across all 5 supported languages
+FILLERS = {
+    # English / common
+    "umm", "uh", "uhh", "hmm", "aaa", "err", "please",
+    "okay", "ok", "actually", "basically",
+    # Hindi / Hinglish
+    "bhai", "bhaiya", "bhaiyya", "bhaia", "yaar", "boss",
+    "sunlo", "suniye", "suno",
+    "bolo", "batao", "ji", "haan", "theek", "acha", "accha", "matlab",
+    "dekho", "dekhiye", "sahab", "saab",
+    # Gujarati
+    "kem", "saro",
+    # Marathi
+    "arey", "bro", "na",
+}
+
+
+def normalize(text: str) -> str:
     """
-    Normalize transcribed Hindi/Hinglish/English text.
-
-    Steps:
-    1. Unicode normalization
-    2. Lowercase
-    3. Remove punctuation (keep Devanagari)
-    4. Fix common misspellings
-    5. Remove filler/noise words
-    6. Collapse whitespace
+    Input : raw Whisper transcript
+    Output: cleaned lowercase string ready for intent + item parsing
     """
     if not text or not text.strip():
         return ""
 
-    # Unicode normalize
-    text = unicodedata.normalize("NFKC", text)
+    text = text.lower().strip()
 
-    # Lowercase (only Latin chars, Devanagari is case-insensitive)
-    text = text.lower()
+    # Remove punctuation except spaces
+    text = re.sub(r"[^\w\s]", " ", text)
 
-    # Remove punctuation except Devanagari characters
-    text = re.sub(r"[^\w\s\u0900-\u097F]", " ", text)
+    # Transliterate Devanagari -> romanized BEFORE number/filler processing
+    text = _transliterate_devanagari(text)
 
-    # Apply corrections
-    words = text.split()
-    corrected = []
-    for word in words:
-        if word in NOISE_WORDS:
-            continue
-        corrected.append(CORRECTIONS.get(word, word))
+    # Replace number words with digits (Hindi, Gujarati, Marathi, English)
+    tokens = text.split()
+    tokens = [str(NUMBER_WORDS[t]) if t in NUMBER_WORDS else t for t in tokens]
+    text = " ".join(tokens)
 
-    text = " ".join(corrected)
+    # Remove filler words
+    tokens = text.split()
+    tokens = [t for t in tokens if t not in FILLERS]
+    text = " ".join(tokens)
 
-    # Collapse whitespace
+    # Collapse multiple spaces
     text = re.sub(r"\s+", " ", text).strip()
 
-    return text
-
-
-def transliterate_hindi_numbers(text: str) -> str:
-    """Convert Hindi number words to digits."""
-    hindi_nums = {
-        "एक": "1", "दो": "2", "तीन": "3", "चार": "4",
-        "पाँच": "5", "छह": "6", "सात": "7", "आठ": "8",
-        "नौ": "9", "दस": "10",
-    }
-    for hindi, digit in hindi_nums.items():
-        text = text.replace(hindi, digit)
     return text

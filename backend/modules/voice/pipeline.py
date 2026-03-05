@@ -1,112 +1,149 @@
 """
-pipeline.py — Voice Ordering Pipeline Orchestrator
-====================================================
-Runs the complete voice → order flow:
-Audio → STT → Normalize → Intent → Match Items →
-Extract Qty/Modifiers → Build Order → Suggest Upsell
+pipeline.py — Voice Pipeline Orchestrator
+============================================
+Loads menu data FROM DB at startup -> builds dynamic search corpus.
+No hardcoded menu items anywhere. All processing is local.
 """
 
-import logging
-from pathlib import Path
-from typing import Optional
+import uuid
 
-from sqlalchemy.orm import Session
-
-from .stt import transcribe_audio
-from .normalizer import normalize_text
+from .stt import transcribe
+from .normalizer import normalize
 from .intent_mapper import classify_intent
-from .item_matcher import match_items
-from .quantity_extractor import extract_quantities
+from .item_matcher import build_search_corpus, extract_all_items
+from .quantity_extractor import extract_quantities_for_items
 from .modifier_extractor import extract_modifiers
-from .upsell_engine import suggest_upsells
-from .order_builder import build_order, generate_kot
-
-logger = logging.getLogger("petpooja.voice")
 
 
-def process_voice_order(
-    db: Session,
-    audio_path: Optional[str] = None,
-    text_input: Optional[str] = None,
-    session_id: Optional[str] = None,
-) -> dict:
-    """
-    Process a voice order from audio or text input.
+# -- Stub functions for D's files (until D delivers them) --
+def _stub_get_upsell_suggestions(*args, **kwargs):
+    return []
 
-    Args:
-        db: Database session for menu lookups
-        audio_path: Path to audio file (WAV/MP3)
-        text_input: Direct text input (skip STT)
-        session_id: Order session ID
 
-    Returns:
-        Dict with parsed order, upsells, and KOT
-    """
-    result = {
-        "session_id": session_id,
-        "raw_text": "",
-        "normalized_text": "",
-        "intent": "",
-        "matched_items": [],
-        "order": None,
-        "kot": None,
-        "upsells": [],
-        "errors": [],
+def _stub_build_order(parsed_items, upsells_shown):
+    subtotal = sum(i.get("line_total", 0) for i in parsed_items)
+    return {
+        "order_id": str(uuid.uuid4()),
+        "items": parsed_items,
+        "upsells_shown": upsells_shown,
+        "subtotal": subtotal,
+        "status": "pending",
     }
 
-    # Step 1: STT (or use text input directly)
-    if audio_path:
-        try:
-            raw_text = transcribe_audio(audio_path)
-        except Exception as e:
-            logger.error(f"STT failed: {e}")
-            result["errors"].append(f"Speech recognition failed: {str(e)}")
-            return result
-    elif text_input:
-        raw_text = text_input
-    else:
-        result["errors"].append("No audio or text input provided")
-        return result
 
-    result["raw_text"] = raw_text
+# Try importing D's real modules; fall back to stubs
+try:
+    from .upsell_engine import get_upsell_suggestions
+except (ImportError, Exception):
+    get_upsell_suggestions = _stub_get_upsell_suggestions
 
-    # Step 2: Normalize Hindi/Hinglish text
-    normalized = normalize_text(raw_text)
-    result["normalized_text"] = normalized
+try:
+    from .order_builder import build_order
+except (ImportError, Exception):
+    build_order = _stub_build_order
 
-    # Step 3: Classify intent
-    intent = classify_intent(normalized)
-    result["intent"] = intent
 
-    if intent not in ("order", "add", "modify"):
-        # Non-ordering intents (greeting, query, etc.)
-        return result
+class VoicePipeline:
+    def __init__(self, db_session, menu_items: list,
+                 combo_rules: list = None, hidden_stars: list = None):
+        """
+        Loaded ONCE at app startup.
 
-    # Step 4: Match against menu items
-    matched = match_items(db, normalized)
-    result["matched_items"] = matched
+        menu_items: loaded FROM DATABASE -- this is what makes it dynamic.
+        The search corpus is built from whatever is in the DB.
+        Change the menu in DB -> pipeline auto-adapts.
+        """
+        self.db = db_session
+        self.menu_items = menu_items
+        # DYNAMIC: corpus built from DB menu items, not hardcoded
+        self.corpus = build_search_corpus(menu_items)
+        self.combo_rules = combo_rules or []
+        self.hidden_stars = hidden_stars or []
 
-    if not matched:
-        result["errors"].append("Could not match any menu items from input")
-        return result
+    def process_text(self, text: str) -> dict:
+        """Process text input (skips STT). For testing without audio."""
+        return self._run_pipeline(text, original_transcript=text,
+                                  detected_language="unknown")
 
-    # Step 5: Extract quantities
-    items_with_qty = extract_quantities(normalized, matched)
+    def process_audio(self, audio_path: str) -> dict:
+        """Full pipeline: audio file -> structured order JSON."""
+        stt_result = transcribe(audio_path)
+        return self._run_pipeline(
+            stt_result["transcript"],
+            original_transcript=stt_result["transcript"],
+            detected_language=stt_result["detected_language"],
+        )
 
-    # Step 6: Extract modifiers (spice level, size, add-ons)
-    items_with_mods = extract_modifiers(normalized, items_with_qty)
+    def _run_pipeline(self, text, original_transcript, detected_language):
+        # Stage 2: Normalize
+        normalized = normalize(text)
 
-    # Step 7: Build order
-    order = build_order(items_with_mods, session_id)
-    result["order"] = order
+        # Stage 3: Intent
+        intent, matched_pattern = classify_intent(normalized)
 
-    # Step 8: Generate KOT
-    kot = generate_kot(order)
-    result["kot"] = kot
+        # Stage 4: Match items DYNAMICALLY against DB corpus
+        matched_items = extract_all_items(normalized, self.corpus)
 
-    # Step 9: Suggest upsells
-    ordered_item_ids = [item["item_id"] for item in items_with_mods]
-    upsells = suggest_upsells(db, ordered_item_ids)
-    result["upsells"] = upsells
+        # Stage 5: Quantities + Modifiers
+        items_with_qty = extract_quantities_for_items(normalized, matched_items)
 
-    return result
+        items_with_modifiers = []
+        for item in items_with_qty:
+            # DYNAMIC: modifier cross-check uses DB item data
+            mods = extract_modifiers(normalized, item["item_id"], self.menu_items)
+            items_with_modifiers.append({**item, "modifiers": mods})
+
+        # Enrich with menu data from DB (name, price)
+        enriched_items = self._enrich_with_menu_data(items_with_modifiers)
+
+        # Stage 6: Upsell (D's file)
+        upsell_suggestions = []
+        if enriched_items:
+            try:
+                upsell_suggestions = get_upsell_suggestions(
+                    current_order_items=enriched_items,
+                    menu_data=self.menu_items,
+                    combo_rules=self.combo_rules,
+                    hidden_stars=self.hidden_stars,
+                )
+            except Exception:
+                upsell_suggestions = []
+
+        # Stage 7: Build Order (D's file)
+        order = None
+        if enriched_items:
+            try:
+                order = build_order(enriched_items, upsell_suggestions)
+            except Exception:
+                order = _stub_build_order(enriched_items, upsell_suggestions)
+
+        needs_clarification = (intent == "ORDER" and len(enriched_items) == 0)
+
+        return {
+            "transcript": original_transcript,
+            "normalized": normalized,
+            "detected_language": detected_language,
+            "intent": intent,
+            "items": enriched_items,
+            "upsell_suggestions": upsell_suggestions,
+            "order": order,
+            "needs_clarification": needs_clarification,
+        }
+
+    def _enrich_with_menu_data(self, matched_items):
+        """Adds name, price FROM DB to each matched item."""
+        menu_map = {item.id: item for item in self.menu_items}
+        enriched = []
+        for match in matched_items:
+            menu_item = menu_map.get(match["item_id"])
+            if menu_item:
+                enriched.append({
+                    "item_id": match["item_id"],
+                    "item_name": menu_item.name,
+                    "quantity": match["quantity"],
+                    "unit_price": menu_item.selling_price,
+                    "line_total": match["quantity"] * menu_item.selling_price,
+                    "modifiers": match["modifiers"],
+                    "confidence": match["confidence"],
+                })
+        return enriched

@@ -1,105 +1,110 @@
 """
-stt.py — faster-whisper Speech-to-Text Wrapper
-================================================
-Local STT using faster-whisper — no API calls.
-Handles WAV/MP3 audio files from the voice recorder.
+stt.py — Speech-to-Text using faster-whisper
+==============================================
+Runs 100% locally — no external API calls.
+Model loaded once on first use, cached forever.
+Requires: pip install faster-whisper + ffmpeg installed.
 """
 
+import os
+import subprocess
+import shutil
+import glob
 import logging
-from pathlib import Path
 
 logger = logging.getLogger("petpooja.voice.stt")
 
-# Lazy-loaded model (loaded on first use)
+
+def _find_ffmpeg() -> str:
+    """Locate ffmpeg executable. Checks PATH first, then common Windows locations."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        return ffmpeg
+    # Common Windows install locations
+    for pattern in [
+        r"C:\ffmpeg*\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg*\bin\ffmpeg.exe",
+        r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe"),
+    ]:
+        matches = glob.glob(pattern)
+        if matches:
+            return matches[0]
+    raise FileNotFoundError(
+        "ffmpeg not found. Install it: winget install Gyan.FFmpeg"
+    )
+
+# Lazy-loaded model — loaded on first transcribe() call
+# This avoids crashes when testing text-only (no audio needed)
 _model = None
 
 
 def _get_model():
-    """Lazy-load the faster-whisper model."""
+    """Load Whisper model on demand. Cached after first call."""
     global _model
     if _model is None:
-        try:
-            from faster_whisper import WhisperModel
-
-            logger.info("Loading faster-whisper model (base)...")
-            _model = WhisperModel(
-                "base",        # Options: tiny, base, small, medium, large-v3
-                device="cpu",  # Use "cuda" if GPU available
-                compute_type="int8",
-            )
-            logger.info("faster-whisper model loaded successfully")
-        except ImportError:
-            logger.warning(
-                "faster-whisper not installed. "
-                "Install with: pip install faster-whisper"
-            )
-            _model = None
+        from faster_whisper import WhisperModel
+        logger.info("Loading faster-whisper model (small)...")
+        _model = WhisperModel("small", device="cpu", compute_type="int8")
+        logger.info("Model loaded — runs fully offline from now on")
     return _model
 
 
-def transcribe_audio(
-    audio_path: str,
-    language: str = "hi",
-) -> str:
+def convert_to_wav(input_path: str) -> str:
     """
-    Transcribe an audio file to text using faster-whisper.
-
-    Args:
-        audio_path: Path to WAV/MP3/WEBM audio file
-        language: Language hint ('hi' for Hindi, 'en' for English)
-
-    Returns:
-        Transcribed text string
+    Browser MediaRecorder produces webm/opus.
+    Whisper needs WAV 16kHz mono.
+    Converts any audio format to WAV using ffmpeg (local tool).
     """
+    output_path = input_path.rsplit(".", 1)[0] + "_converted.wav"
+    ffmpeg_path = _find_ffmpeg()
+    subprocess.run([
+        ffmpeg_path, "-y",        # -y = overwrite if exists
+        "-i", input_path,
+        "-ar", "16000",           # 16kHz sample rate
+        "-ac", "1",               # mono channel
+        output_path
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_path
+
+
+# Romanized-Hindi prompt: biases Whisper to output Latin script for Hinglish
+_INITIAL_PROMPT = (
+    "Bhaiya do paneer tikka aur ek butter naan dena. "
+    "Ek chicken biryani extra spicy aur do mango lassi chahiye. "
+    "Teen roti aur dal makhani please. "
+    "Boss ek gulab jamun aur masala chai dena."
+)
+
+
+def transcribe(audio_path: str) -> dict:
+    """
+    Takes any audio file path.
+    Returns transcript + detected language.
+    language=None means Whisper auto-detects (handles EN, HI, Hinglish).
+    initial_prompt biases Whisper toward romanized Hinglish output.
+    """
+    # Convert to WAV first (handles webm, mp3, m4a, etc.)
+    wav_path = convert_to_wav(audio_path)
+
     model = _get_model()
-
-    if model is None:
-        logger.warning("No STT model available, returning empty string")
-        return ""
-
-    path = Path(audio_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Audio file not found: {audio_path}")
-
-    logger.info(f"Transcribing: {path.name} (language={language})")
-
     segments, info = model.transcribe(
-        str(path),
-        language=language,
+        wav_path,
         beam_size=5,
-        word_timestamps=False,
-        vad_filter=True,         # Voice Activity Detection
-        vad_parameters=dict(
-            min_silence_duration_ms=500,
-            speech_pad_ms=300,
-        ),
+        language=None,        # auto-detect language
+        task="transcribe",
+        vad_filter=True,      # removes silent parts
+        initial_prompt=_INITIAL_PROMPT,  # bias toward romanized Hinglish
     )
 
-    # Collect all segments
-    text_parts = []
-    for segment in segments:
-        text_parts.append(segment.text.strip())
+    transcript = " ".join(segment.text.strip() for segment in segments)
 
-    transcription = " ".join(text_parts)
-    logger.info(f"Transcription: {transcription[:80]}...")
-    return transcription
+    # Cleanup converted file
+    if wav_path != audio_path and os.path.exists(wav_path):
+        os.remove(wav_path)
 
-
-def transcribe_bytes(
-    audio_bytes: bytes,
-    language: str = "hi",
-) -> str:
-    """
-    Transcribe audio bytes (e.g., from a WebSocket stream).
-    Saves to a temp file and transcribes.
-    """
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(audio_bytes)
-        tmp_path = tmp.name
-
-    try:
-        return transcribe_audio(tmp_path, language)
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    return {
+        "transcript": transcript.strip(),
+        "detected_language": info.language,         # "en", "hi", etc.
+        "language_confidence": round(info.language_probability, 3),
+    }

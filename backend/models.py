@@ -52,6 +52,8 @@ class MenuItem(Base):
     is_veg = Column(Boolean, default=True)
     is_available = Column(Boolean, default=True)
     is_bestseller = Column(Boolean, default=False)
+    aliases = Column(String(500))  # pipe-separated fuzzy match aliases e.g. "pnr tikka|panir tikka"
+    modifiers = Column(Text)  # JSON string of allowed modifiers e.g. '{"spice":["mild","medium","hot"]}'
     tags = Column(JSON, default=list)  # ["spicy", "chef-special", etc.]
     created_at = Column(DateTime, default=datetime.utcnow)
 
