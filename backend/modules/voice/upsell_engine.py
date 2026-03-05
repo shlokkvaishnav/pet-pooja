@@ -205,6 +205,8 @@ def _fallback_suggestions(
             MenuItem.is_available == True,
             ~MenuItem.id.in_(exclude_ids),
         )
+        .order_by(MenuItem.selling_price.desc())
+        .limit(limit * 3)    # fetch a small pool, not all items
         .all()
     )
 

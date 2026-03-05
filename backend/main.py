@@ -4,14 +4,31 @@ Petpooja AI Copilot — FastAPI Application Entry Point
 Supabase PostgreSQL database, faster-whisper STT, rule-based NLP.
 """
 
+import logging
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from database import engine, Base
 from api.routes_revenue import router as revenue_router
 from api.routes_voice import router as voice_router
+
+# ── Structured logging ──
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("petpooja")
+
+# ── Allowed origins (configurable via env, defaults to localhost for safety) ──
+_ALLOWED_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
+).split(",")
 
 
 @asynccontextmanager
@@ -19,37 +36,48 @@ async def lifespan(app: FastAPI):
     """Create database tables and load pipeline on startup."""
     # Create all tables
     Base.metadata.create_all(bind=engine)
-    print("🚀 Petpooja AI Copilot — Server ready")
-    print("📊 Revenue engine loaded")
+    logger.info("Petpooja AI Copilot — Server ready")
+    logger.info("Revenue engine loaded")
 
     # Load voice pipeline into app.state for shared access
     try:
         from modules.voice.pipeline import process_voice_order
         app.state.pipeline = process_voice_order
-        print("🎙️ Voice pipeline ready (faster-whisper)")
+        logger.info("Voice pipeline ready (faster-whisper)")
     except Exception as e:
-        print(f"⚠️ Voice pipeline load warning: {e}")
-        print("   Voice endpoints will still work but may be slower on first call")
+        logger.warning("Voice pipeline load warning: %s", e)
+        logger.info("Voice endpoints will still work but may be slower on first call")
         app.state.pipeline = None
 
     yield
-    print("Server shutting down...")
+    logger.info("Server shutting down...")
 
 
 app = FastAPI(
     title="Petpooja AI Copilot",
     description="Restaurant Revenue Intelligence & Voice Ordering — Supabase PostgreSQL backend",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+
+# ── Global exception handler ──
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": str(exc)},
+    )
+
 
 # ── Route registration ──
 app.include_router(revenue_router, prefix="/api/revenue", tags=["Revenue"])
@@ -62,7 +90,7 @@ def health():
     return {
         "status": "healthy",
         "service": "petpooja-ai-copilot",
-        "mode": "offline",
+        "version": "0.2.0",
         "pipeline_loaded": hasattr(app.state, "pipeline") and app.state.pipeline is not None,
     }
 

@@ -13,6 +13,7 @@ Supports:
 """
 
 import logging
+import threading
 from collections import Counter
 
 import pandas as pd
@@ -22,7 +23,8 @@ from mlxtend.frequent_patterns import fpgrowth, association_rules
 
 from models import MenuItem, SaleTransaction, ComboSuggestion
 
-# Global state to track when we last trained the ML model
+# Thread-safe tracking of training state
+_train_lock = threading.Lock()
 _last_trained_order_count = 0
 
 logger = logging.getLogger("petpooja.revenue.combo")
@@ -65,25 +67,27 @@ def generate_combos(
     )
     existing_combos_count = db.query(ComboSuggestion).count()
 
-    needs_training = (
-        existing_combos_count == 0
-        or total_orders >= _last_trained_order_count + update_threshold
-    )
+    with _train_lock:
+        needs_training = (
+            existing_combos_count == 0
+            or total_orders >= _last_trained_order_count + update_threshold
+        )
 
-    if needs_training and total_orders > 0:
-        logger.info(
-            f"Training Combo ML Model (orders: {total_orders}, window: {window_size})"
-        )
-        _run_ml_pipeline(
-            db,
-            min_support=min_support,
-            min_confidence=min_confidence,
-            min_lift=min_lift,
-            max_combos=max_combos,
-            window_size=window_size,
-            target_discount_pct=target_discount_pct,
-        )
-        _last_trained_order_count = total_orders
+        if needs_training and total_orders > 0:
+            logger.info(
+                "Training Combo ML Model (orders: %d, window: %d)",
+                total_orders, window_size,
+            )
+            _run_ml_pipeline(
+                db,
+                min_support=min_support,
+                min_confidence=min_confidence,
+                min_lift=min_lift,
+                max_combos=max_combos,
+                window_size=window_size,
+                target_discount_pct=target_discount_pct,
+            )
+            _last_trained_order_count = total_orders
 
     # 2. Return cached combos from the database
     return _fetch_combos_from_db(db)
@@ -154,7 +158,8 @@ def _run_ml_pipeline(
             }
 
     logger.info(
-        f"Built baskets from {len(baskets)} orders, {len(item_info)} unique items"
+        "Built baskets from %d orders, %d unique items",
+        len(baskets), len(item_info),
     )
 
     # Step D: Boolean basket matrix
@@ -175,7 +180,7 @@ def _run_ml_pipeline(
             _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
             return
 
-        logger.info(f"Found {len(frequent)} frequent itemsets")
+        logger.info("Found %d frequent itemsets", len(frequent))
 
         # Step F: Association rules
         rules = association_rules(frequent, metric="lift", min_threshold=min_lift)
@@ -185,10 +190,10 @@ def _run_ml_pipeline(
             _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
             return
 
-        logger.info(f"Generated {len(rules)} association rules")
+        logger.info("Generated %d association rules", len(rules))
 
-    except ImportError:
-        logger.error("mlxtend not installed -- falling back to pair counting")
+    except Exception as e:
+        logger.error("FP-Growth pipeline error: %s -- falling back to pair counting", e)
         _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
         return
 
@@ -260,9 +265,10 @@ def _run_ml_pipeline(
 def _save_combos_to_db(db: Session, combos: list[dict]):
     """Persist combo suggestions to the ComboSuggestion table."""
     try:
-        db.query(ComboSuggestion).delete()
+        # Build new combo objects first, then delete+insert in one transaction
+        new_combos = []
         for combo in combos:
-            db_combo = ComboSuggestion(
+            new_combos.append(ComboSuggestion(
                 name=combo["name"],
                 item_ids=combo["item_ids"],
                 item_names=combo["item_names"],
@@ -274,12 +280,14 @@ def _save_combos_to_db(db: Session, combos: list[dict]):
                 confidence=combo["confidence"],
                 lift=combo.get("lift"),
                 combo_score=combo.get("combo_score"),
-            )
-            db.add(db_combo)
+            ))
+
+        db.query(ComboSuggestion).delete()
+        db.add_all(new_combos)
         db.commit()
     except Exception as e:
         db.rollback()
-        logger.error(f"Error saving combos to DB: {e}")
+        logger.error("Error saving combos to DB: %s", e)
 
 
 def _fetch_combos_from_db(db: Session) -> list[dict]:

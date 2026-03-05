@@ -5,13 +5,14 @@ routes_voice.py — Voice Ordering API Endpoints
 order confirmation, and order history.
 """
 
+import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File, Body
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 
 from database import get_db
 from models import Order
@@ -19,16 +20,48 @@ from modules.voice.pipeline import process_voice_order
 from modules.voice.order_builder import build_order, generate_kot, save_order_to_db
 
 router = APIRouter()
+logger = logging.getLogger("petpooja.api.voice")
+
+# Max audio file size: 10 MB
+_MAX_AUDIO_SIZE = 10 * 1024 * 1024
+_ALLOWED_EXTENSIONS = {".wav", ".mp3", ".ogg", ".webm", ".m4a", ".flac"}
 
 
 class TextInput(BaseModel):
-    text: str
+    text: str = Field(..., min_length=1, max_length=2000)
     session_id: str | None = None
 
 
 class ConfirmOrderInput(BaseModel):
     order: dict
     kot: dict | None = None
+
+
+async def _save_audio_temp(audio: UploadFile) -> str:
+    """Validate and save uploaded audio to a temp file. Returns path."""
+    suffix = Path(audio.filename or "audio.wav").suffix.lower() or ".wav"
+    if suffix not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported audio format '{suffix}'. Allowed: {', '.join(_ALLOWED_EXTENSIONS)}",
+        )
+
+    content = await audio.read()
+    if len(content) > _MAX_AUDIO_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio file too large ({len(content)} bytes). Max: {_MAX_AUDIO_SIZE} bytes.",
+        )
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="Empty audio file.")
+
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(content)
+        tmp.flush()
+        return tmp.name
+    finally:
+        tmp.close()
 
 
 # ── 1. POST /api/voice/transcribe ──
@@ -42,15 +75,8 @@ async def transcribe_audio(
     Audio → transcript only (no order processing).
     Returns: {transcript, detected_language, confidence}
     """
-    audio_path = None
+    audio_path = await _save_audio_temp(audio)
     try:
-        suffix = Path(audio.filename).suffix or ".wav"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            content = await audio.read()
-            tmp.write(content)
-            audio_path = tmp.name
-
-        # Use only STT
         from modules.voice.stt import transcribe_audio as stt_transcribe
         result = stt_transcribe(audio_path)
 
@@ -60,10 +86,10 @@ async def transcribe_audio(
             "confidence": result.get("confidence", 0.0) if isinstance(result, dict) else 0.0,
         }
     except Exception as e:
-        return {"transcript": "", "error": str(e)}
+        logger.exception("Transcription failed")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
     finally:
-        if audio_path:
-            Path(audio_path).unlink(missing_ok=True)
+        Path(audio_path).unlink(missing_ok=True)
 
 
 # ── 2. POST /api/voice/process-audio ──
@@ -78,14 +104,8 @@ async def process_audio(
     Full pipeline: audio → transcript → parsed order → upsell suggestions.
     Returns: {transcript, intent, order, upsell_suggestions}
     """
-    audio_path = None
+    audio_path = await _save_audio_temp(audio)
     try:
-        suffix = Path(audio.filename).suffix or ".wav"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            content = await audio.read()
-            tmp.write(content)
-            audio_path = tmp.name
-
         result = process_voice_order(
             db=db,
             audio_path=audio_path,
@@ -93,10 +113,10 @@ async def process_audio(
         )
         return result
     except Exception as e:
-        return {"error": str(e), "order": None, "upsells": []}
+        logger.exception("Voice pipeline failed")
+        raise HTTPException(status_code=500, detail=f"Voice processing failed: {e}")
     finally:
-        if audio_path:
-            Path(audio_path).unlink(missing_ok=True)
+        Path(audio_path).unlink(missing_ok=True)
 
 
 # ── 3. POST /api/voice/process ──
@@ -111,12 +131,16 @@ def process_text(
     Accepts: {text: string}
     Returns: same as /process-audio but from text input
     """
-    result = process_voice_order(
-        db=db,
-        text_input=body.text,
-        session_id=body.session_id,
-    )
-    return result
+    try:
+        result = process_voice_order(
+            db=db,
+            text_input=body.text,
+            session_id=body.session_id,
+        )
+        return result
+    except Exception as e:
+        logger.exception("Text processing failed")
+        raise HTTPException(status_code=500, detail=f"Text processing failed: {e}")
 
 
 # ── 4. POST /api/voice/confirm-order ──
@@ -132,13 +156,13 @@ def confirm_order(
     Returns: {order_id, kot}
     """
     order = body.order
-    kot = body.kot
+    if not order or not order.get("items"):
+        raise HTTPException(status_code=400, detail="Order must contain items.")
 
-    # Generate KOT if not provided
+    kot = body.kot
     if not kot:
         kot = generate_kot(order)
 
-    # Save to database
     try:
         result = save_order_to_db(order, kot, db)
         return {
@@ -149,22 +173,27 @@ def confirm_order(
             "status": "confirmed",
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        logger.exception("Order confirmation failed")
+        raise HTTPException(status_code=500, detail=f"Order save failed: {e}")
 
 
 # ── 5. GET /api/voice/orders ──
 
 @router.get("/orders")
 def get_recent_orders(
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     """
-    Recent orders list (last 50), sorted by created_at desc.
+    Recent orders with pagination, sorted by created_at desc.
     """
+    total = db.query(func.count(Order.id)).scalar() or 0
+
     orders = (
         db.query(Order)
         .order_by(desc(Order.created_at))
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -184,6 +213,9 @@ def get_recent_orders(
             for o in orders
         ],
         "count": len(orders),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
     }
 
 
@@ -199,21 +231,22 @@ async def voice_order_legacy(
     """Legacy endpoint — process voice or text order."""
     audio_path = None
 
-    if audio and audio.filename:
-        suffix = Path(audio.filename).suffix or ".wav"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            content = await audio.read()
-            tmp.write(content)
-            audio_path = tmp.name
+    try:
+        if audio and audio.filename:
+            audio_path = await _save_audio_temp(audio)
 
-    result = process_voice_order(
-        db=db,
-        audio_path=audio_path,
-        text_input=text,
-        session_id=session_id,
-    )
-
-    if audio_path:
-        Path(audio_path).unlink(missing_ok=True)
-
-    return result
+        result = process_voice_order(
+            db=db,
+            audio_path=audio_path,
+            text_input=text,
+            session_id=session_id,
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Legacy voice order failed")
+        raise HTTPException(status_code=500, detail=f"Voice order failed: {e}")
+    finally:
+        if audio_path:
+            Path(audio_path).unlink(missing_ok=True)

@@ -5,12 +5,15 @@ Builds structured orders from parsed items, generates
 Kitchen Order Tickets (KOT), and saves to database.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from models import Order, OrderItem, KOT
+
+logger = logging.getLogger("petpooja.voice.order_builder")
 
 
 def build_order(
@@ -31,6 +34,21 @@ def build_order(
     Returns:
         Complete order dict
     """
+    if not items:
+        return {
+            "order_id": session_id or f"ORD-{uuid.uuid4().hex[:8].upper()}",
+            "items": [],
+            "item_count": 0,
+            "total_quantity": 0,
+            "subtotal": 0,
+            "tax": 0,
+            "total": 0,
+            "order_type": order_type,
+            "table_number": table_number,
+            "status": "building",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     order_id = session_id or f"ORD-{uuid.uuid4().hex[:8].upper()}"
 
     order_items = []
@@ -207,6 +225,7 @@ def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
             db.add(db_kot)
 
         db.commit()
+        logger.info("Order %s saved to DB", order["order_id"])
 
         return {
             "success": True,
@@ -216,6 +235,7 @@ def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
             "total": order["total"],
         }
 
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise Exception(f"Failed to save order: {str(e)}")
+        logger.exception("Failed to save order %s", order.get("order_id", "unknown"))
+        raise
