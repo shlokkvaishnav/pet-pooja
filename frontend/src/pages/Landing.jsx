@@ -14,7 +14,16 @@ export default function Landing() {
     const [activeSlide, setActiveSlide] = useState(0)
     const [fadeClass, setFadeClass] = useState('lp-slide-visible')
     const [titleLoaded, setTitleLoaded] = useState(false)
+    const [navScrolled, setNavScrolled] = useState(false)
     const intervalRef = useRef(null)
+
+    // Detect scroll to toggle nav
+    useEffect(() => {
+        const heroHeight = window.innerHeight
+        const onScroll = () => setNavScrolled(window.scrollY > heroHeight * 0.7)
+        window.addEventListener('scroll', onScroll, { passive: true })
+        return () => window.removeEventListener('scroll', onScroll)
+    }, [])
 
     // Auto-advance slides
     useEffect(() => {
@@ -47,17 +56,25 @@ export default function Landing() {
 
     return (
         <div className="lp">
-            {/* Floating Island Nav */}
-            <nav className="lp-nav">
-                <div className="lp-nav-island">
+            {/* Full-width Nav — transparent in hero, glass after scroll */}
+            <nav className={`lp-nav ${navScrolled ? 'lp-nav--scrolled' : ''}`}>
+                {/* Logo */}
+                <div className="lp-nav-logo" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+                    SIZZLE
+                </div>
+
+                {/* Links */}
+                <div className="lp-nav-links">
                     <a href="#" className="lp-nav-link">HOME</a>
                     <a href="#about" className="lp-nav-link">ABOUT US</a>
                     <a href="#" className="lp-nav-link">LOCATION</a>
                     <a href="#" className="lp-nav-link">CONTACT</a>
-                    <button className="lp-nav-dashboard" onClick={() => navigate('/login')}>
-                        VIEW DASHBOARD
-                    </button>
                 </div>
+
+                {/* CTA */}
+                <button className="lp-nav-dashboard" onClick={() => navigate('/login')}>
+                    VIEW DASHBOARD
+                </button>
             </nav>
 
             {/* Hero */}
