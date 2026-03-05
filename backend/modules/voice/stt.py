@@ -4,6 +4,14 @@ stt.py — Speech-to-Text using faster-whisper
 Runs 100% locally — no external API calls.
 Model loaded once on first use, cached forever.
 Requires: pip install faster-whisper + ffmpeg installed.
+
+Model selection (via WHISPER_MODEL env var):
+  tiny          ~75MB   fastest, lowest accuracy
+  base          ~145MB  fast, basic accuracy
+  small         ~460MB  good balance (old default)
+  medium        ~1.5GB  better accuracy
+  large-v3-turbo ~809MB best balance — DEFAULT (fast + accurate)
+  large-v3       ~3GB   highest accuracy, slowest on CPU
 """
 
 import os
@@ -13,6 +21,9 @@ import glob
 import logging
 
 logger = logging.getLogger("petpooja.voice.stt")
+
+# Model name — override via WHISPER_MODEL env var
+_WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 
 
 def _find_ffmpeg() -> str:
@@ -40,12 +51,29 @@ _model = None
 
 
 def _get_model():
-    """Load Whisper model on demand. Cached after first call."""
+    """Load Whisper model on demand. Cached after first call.
+    
+    Auto-detects CUDA; falls back to CPU with int8 quantization.
+    Model size controlled by WHISPER_MODEL env var (default: large-v3-turbo).
+    """
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
-        logger.info("Loading faster-whisper model (small)...")
-        _model = WhisperModel("small", device="cpu", compute_type="int8")
+        # Try CUDA first, fall back to CPU
+        try:
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                device, compute_type = "cuda", "float16"
+            else:
+                device, compute_type = "cpu", "int8"
+        except Exception:
+            device, compute_type = "cpu", "int8"
+
+        logger.info(
+            "Loading faster-whisper model '%s' on %s (%s)...",
+            _WHISPER_MODEL, device, compute_type
+        )
+        _model = WhisperModel(_WHISPER_MODEL, device=device, compute_type=compute_type)
         logger.info("Model loaded — runs fully offline from now on")
     return _model
 
@@ -68,12 +96,20 @@ def convert_to_wav(input_path: str) -> str:
     return output_path
 
 
-# Romanized-Hindi prompt: biases Whisper to output Latin script for Hinglish
+# Romanized-Hindi + Indian-English prompt:
+# Biases Whisper toward correct spellings even with Indian accents.
+# Includes common mispronounced words (chicken, mutton, biryani, etc.)
+# so the model learns the expected vocabulary before transcribing.
 _INITIAL_PROMPT = (
-    "Bhaiya do paneer tikka aur ek butter naan dena. "
+    "Order for chicken biryani, mutton curry, paneer tikka, butter naan. "
     "Ek chicken biryani extra spicy aur do mango lassi chahiye. "
+    "Bhaiya do paneer tikka aur ek butter naan dena. "
     "Teen roti aur dal makhani please. "
-    "Boss ek gulab jamun aur masala chai dena."
+    "One chicken tikka masala, two garlic naan, and one gulab jamun. "
+    "Dahi kebab, tandoori chicken, fish curry, prawn masala. "
+    "Cold drink, masala chai, lassi, cold coffee. "
+    "Boss ek gulab jamun aur masala chai dena. "
+    "Half plate chicken, full plate mutton, chicken 65, chicken manchurian."
 )
 
 
@@ -91,10 +127,12 @@ def transcribe(audio_path: str) -> dict:
     segments, info = model.transcribe(
         wav_path,
         beam_size=5,
-        language=None,        # auto-detect language
+        language=None,                    # auto-detect language
         task="transcribe",
-        vad_filter=True,      # removes silent parts
-        initial_prompt=_INITIAL_PROMPT,  # bias toward romanized Hinglish
+        vad_filter=True,                  # removes silent parts
+        initial_prompt=_INITIAL_PROMPT,   # bias toward correct food vocabulary
+        condition_on_previous_text=False, # prevents hallucination loops
+        temperature=0.0,                  # deterministic — best for short commands
     )
 
     transcript = " ".join(segment.text.strip() for segment in segments)

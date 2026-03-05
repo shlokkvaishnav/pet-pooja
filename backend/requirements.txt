@@ -23,6 +23,11 @@ faster-whisper
 # Fuzzy text matching (Person B - item matching)
 rapidfuzz
 
+# Semantic vector matching — hybrid fuzzy+semantic for accent robustness
+# paraphrase-multilingual-MiniLM-L12-v2 model downloads ~420MB on first run
+sentence-transformers>=2.7.0
+faiss-cpu>=1.8.0
+
 # Audio handling
 pydub
 

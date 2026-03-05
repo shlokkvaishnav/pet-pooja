@@ -7,7 +7,7 @@ from database import SessionLocal
 from models import MenuItem
 from modules.voice.pipeline import VoicePipeline
 
-audio_path = r"C:\Users\Pranshul Soni\Documents\Projects\pet-pooja\audio\Recording (3).m4a"
+audio_path = r"C:\Users\Pranshul Soni\Documents\Projects\pet-pooja\audio\southindian.m4a"
 
 db = SessionLocal()
 items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
