@@ -23,8 +23,12 @@
 | **Backend** | FastAPI + Uvicorn (REST API) |
 | **ORM** | SQLAlchemy (PostgreSQL via Supabase / SQLite fallback) |
 | **STT** | faster-whisper "small" model (local, CPU, ~244MB) |
-| **NLP** | Rule-based (regex intent mapping, no external LLMs) |
-| **Fuzzy Matching** | RapidFuzz (token_sort_ratio, 80% threshold) |
+| **NLP** | Rule-based (regex intent mapping + compound clause splitting, no external LLMs) |
+| **Item Matching** | Hybrid: RapidFuzz fuzzy (0.4 weight) + Sentence-Transformer FAISS semantic vectors (0.6 weight) |
+| **Semantic Model** | paraphrase-multilingual-MiniLM-L12-v2 (~420MB, multilingual, fully offline) |
+| **Vector Search** | FAISS (faiss-cpu, IndexFlatIP cosine similarity, no server needed) |
+| **VAD** | Silero VAD (torch.hub, filters noise before Whisper, fully local) |
+| **Session Persistence** | Redis (preferred) → PostgreSQL fallback → in-memory fallback |
 | **Combo Mining** | mlxtend FP-Growth (association rules) |
 | **Data Processing** | Pandas + NumPy |
 | **Frontend** | React 18 + React Router 6 (SPA) |
@@ -35,7 +39,7 @@
 
 ---
 
-## 3. Database Schema (7 Tables)
+## 3. Database Schema (12 Tables)
 
 ### Categories
 - `id`, `name`, `name_hi` (Hindi), `display_order`, `is_active`
@@ -56,8 +60,32 @@
 ### KOT (Kitchen Order Ticket)
 - `id`, `kot_id` (format: `KOT-YYYYMMDD-XXXX`), `order_id` (FK), `items_summary` (JSON), `print_ready` (plain text for kitchen printer), `created_at`
 
+### Staff
+- `id`, `name`, `role` (waiter/cashier/manager/chef), `pin_hash`, `phone`, `is_active`, `created_at`
+
+### RestaurantTable
+- `id`, `table_number`, `capacity`, `section` (main/patio/private/bar), `status` (empty/occupied/reserved/cleaning), `current_order_id` (FK)
+
+### Shift
+- `id`, `name`, `started_at`, `ended_at`, `opened_by` (FK staff), `closed_by` (FK staff), `opening_cash`, `closing_cash`, `status` (open/closed)
+
 ### ComboSuggestion
-- `id`, `name`, `item_ids` (JSON array), `item_names` (JSON array), `individual_total`, `combo_price`, `discount_pct`, `expected_margin`, `confidence`, `lift`, `support`, `times_co_ordered`, `association_rule` (JSON), `is_active`, `created_at`
+- `id`, `name`, `item_ids` (JSON array), `item_names` (JSON array), `individual_total`, `combo_price`, `discount_pct`, `expected_margin`, `confidence`, `lift`, `support`, `combo_score`, `created_at`
+
+### Ingredient
+- `id`, `name`, `unit` (g/kg/ml/L/pcs), `current_stock`, `reorder_level`, `cost_per_unit`, `is_active`, `created_at`
+- Computed property: `is_low_stock` (current_stock ≤ reorder_level)
+
+### MenuItemIngredient
+- `id`, `menu_item_id` (FK), `ingredient_id` (FK), `quantity_used` (per serving)
+
+### StockLog
+- `id`, `ingredient_id` (FK), `change_qty`, `reason` (purchase/usage/waste/adjustment), `note`, `staff_id` (FK), `created_at`
+
+### VoiceSession
+- `id`, `session_id` (unique, indexed), `last_active` (Unix timestamp), `order_items` (JSON), `last_items` (JSON), `turn_count`, `confirmed`
+- Used by the persistent session store (DB backend) — survives server restarts
+- `to_dict()` / `from_dict()` helpers for backend serialization
 
 ---
 
@@ -87,11 +115,21 @@
 
 The voice pipeline is orchestrated by `pipeline.py` → class `VoicePipeline`. Each stage is a separate module:
 
+### Stage 0: Voice Activity Detection (`vad.py`) — Preprocessing
+- **Silero VAD** via `torch.hub` — fully local, no API calls
+- Detects actual speech segments in audio before sending to Whisper
+- Eliminates Whisper "hallucinations" from restaurant background noise (kitchen sounds, music, other conversations)
+- Configurable thresholds via env vars: `VAD_THRESHOLD` (default 0.40), `VAD_MIN_SPEECH_SEC` (0.3s), `VAD_SPEECH_PAD_MS` (300ms), `VAD_MIN_TOTAL_SPEECH_SEC` (0.4s)
+- `detect_speech_segments()` → list of `{start, end}` timestamps
+- `extract_speech_audio()` → concatenates speech-only segments into cleaned WAV, returns metadata: `total_speech_sec`, `speech_ratio`, `has_speech`
+- Short/empty audio rejected before STT — saves compute and prevents false transcripts
+
 ### Stage 1: Speech-to-Text (`stt.py`)
 - Uses `faster-whisper` "small" model (runs locally on CPU, no API calls)
 - Lazy-loads and caches model on first use
 - Converts WebM/MP3/M4A → WAV 16kHz mono via ffmpeg
-- Returns: transcript text, detected language, confidence score
+- VAD preprocessing filters noise before transcription
+- Returns: transcript text, detected language, confidence score, VAD info
 
 ### Stage 2: Text Normalization (`normalizer.py`)
 - Converts Devanagari Hindi characters → romanized equivalents (20+ character mappings)
@@ -99,43 +137,86 @@ The voice pipeline is orchestrated by `pipeline.py` → class `VoicePipeline`. E
 - Removes filler words (umm, bhai, yaar, please, ok, etc.)
 - Collapses whitespace
 
-### Stage 3: Intent Classification (`intent_mapper.py`)
+### Stage 3: Intent Classification (`intent_mapper.py`) — Compound-Aware
 - Rule-based regex pattern matching, classifies into 6 intents:
   - **ORDER** — "want", "give", "order", "lao", "chahiye", "dena" + quantities
   - **CONFIRM** — "haan", "okay", "theek hai", "bilkul", "confirm", "done"
   - **CANCEL** — "cancel", "remove", "hatao", "nahi chahiye", "wrong"
-  - **MODIFY** — "extra", "change", "without", "spicy", "mild", "no onion"
+  - **MODIFY** — "instead", "change", "badlo", "replace", "swap"
   - **REPEAT** — "repeat", "dobara", "same", "again"
   - **QUERY** — "what", "price", "menu", "available"
-- Context-aware priority: modifiers don't steal intent when order signals present
+- **Compound intent support**: Splits utterances into clauses via conjunction/punctuation patterns ("but", "and", "aur", commas, "instead", "phir", etc.) and classifies each independently
+  - "Cancel the naan but keep the dal" → `[CANCEL(naan), ORDER(dal)]`
+  - "Make it extra spicy and add one raita" → `[MODIFY(biryani), ORDER(raita)]`
+- `classify_intents()` → list of `{intent, matched_pattern, clause, clause_index}`
+- `classify_intent()` → backward-compatible single-intent (priority: CANCEL > CONFIRM > MODIFY > REPEAT > QUERY > ORDER)
+- Context-aware: modifier patterns don't steal intent when order signals present
 
-### Stage 4: Item Matching (`item_matcher.py`)
+### Stage 4: Item Matching (`item_matcher.py`) — Hybrid Fuzzy + Semantic
 - **Fully dynamic** — builds search corpus from DB (MenuItem.name + name_hi + aliases)
-- Uses RapidFuzz `token_sort_ratio` for fuzzy matching (80% threshold)
-- Sliding window approach: 3-word → 2-word → 1-word ngrams to extract all items from transcript
-- Returns matched items with confidence scores
-- `get_alternatives()` for disambiguation when confidence < 85%
+- **Two-layer matching architecture**:
+  1. **RapidFuzz** `token_sort_ratio` — fast character-level fuzzy matching (threshold 70)
+  2. **Sentence-Transformer + FAISS** — semantic meaning vectors that rescue phonetic mishearings
+- **Blend formula**: `final_score = 0.4 × fuzzy + 0.6 × semantic`
+- **Semantic model**: `paraphrase-multilingual-MiniLM-L12-v2` (~420MB, downloads once, fully offline)
+  - Multilingual: handles English, Hindi, Hinglish, Devanagari natively
+  - "chikken" → embeds near "chicken" (phonetic shape preserved), far from "chikan" (embroidery)
+  - "murgh", "चिकन", "chicken" handled as near-synonyms
+- **FAISS index**: `IndexFlatIP` (inner product on L2-normalized vectors = cosine similarity)
+  - Built once at startup from all corpus entries
+  - Queried per match in milliseconds
+- Sliding window approach: 3-word → 2-word → 1-word ngrams to extract all items
+- Confidence thresholds per window size: 3-word (0.85), 2-word (0.78), 1-word (0.75)
+- Extensive SKIP_WORDS list (English + Hindi + Hinglish + Devanagari fillers)
+- `get_alternatives()` merges fuzzy + semantic candidates, deduplicates by item_id, re-ranks by hybrid score
+- Disambiguation flag when confidence < 85%
+- Graceful degradation: falls back to fuzzy-only if semantic model/FAISS fails to load
 
 ### Stage 5: Quantity Extraction (`quantity_extractor.py`)
 - Position-based: looks 3 tokens before/after each matched item position
 - Supports Hindi numbers (ek=1, do=2, teen=3...), English words (one, two, three...), plain digits
 - Default quantity: 1
 
-### Stage 6: Modifier Extraction (`modifier_extractor.py`)
+### Stage 6: Modifier Extraction (`modifier_extractor.py`) — With Target Resolution
 - Extracts spice level (mild/medium/hot), size (small/large), add-ons (no_onion, no_garlic, extra_butter, extra_cheese, no_sauce)
 - Supports both Devanagari and romanized Hindi patterns
 - Cross-checks against `MenuItem.modifiers` JSON from DB — only allows modifiers the item actually supports
+- **Target resolution**: determines WHICH item a modifier applies to:
+  - **Explicit name**: "make the biryani extra spicy" → biryani
+  - **Positional last**: "make the last one spicy" → most recently added item
+  - **Positional first**: "first one mild" → first item in current turn
+  - **Proximity**: "paneer tikka extra spicy" → nearest mentioned item
+  - **Global**: "everything mild" / "sab mein" → all items in cart
+- `extract_modifiers_with_target()` used by pipeline for MODIFY intents with compound clause support
 
 ### Stage 7: Order Building (`order_builder.py`)
 - `build_order()` — creates full order JSON with UUID, item details, subtotal, 5% GST tax
 - `generate_kot()` — Kitchen Order Ticket with formatted items, modifiers, notes; KOT ID: `KOT-YYYYMMDD-XXXX`
 - `save_order_to_db()` — writes Order + OrderItem + KOT rows in a single DB transaction
 
-### Supporting: Session Store (`session_store.py`)
-- In-memory session management for multi-turn conversations
+### Supporting: Session Store (`session_store.py`) — Persistent
+- **3-tier persistence** with automatic backend detection:
+  1. **Redis** (preferred) — fast, multi-worker safe, native 30-min TTL via `SETEX`. Set `REDIS_URL` env var.
+  2. **Database** (fallback) — uses existing SQLAlchemy engine, persists to `voice_sessions` table. Survives server restarts. Auto-creates table on first use.
+  3. **In-memory** (last resort) — original `OrderedDict` behavior with warning log. Used only when neither Redis nor DB is available.
 - 30-minute timeout, max 500 sessions (prevents memory leaks)
-- Thread-safe, handles ORDER/CANCEL/MODIFY/CONFIRM intents across turns
+- Handles ORDER/CANCEL/MODIFY/CONFIRM intents across turns
+- **Compound intent support**: `update_session_compound()` applies multiple intents sequentially ("cancel naan, add roti")
 - Accumulates cart items across multiple voice inputs
+- Server restart no longer loses active carts (with Redis or DB backend)
+- Multi-worker deployment (Gunicorn + Uvicorn workers) safe with Redis backend
+
+### Supporting: Structured Error Recovery (`pipeline_errors.py`)
+- Every pipeline stage returns a `StageResult` dataclass with `status` (success/partial/failure), `error_type`, `user_message`, `suggestions`
+- **Error taxonomy with user-facing recovery messages**:
+  - STT: no speech detected, audio too short, low confidence, model error
+  - Item matching: zero matches (with top-3 fuzzy suggestions), ambiguous match ("Did you mean X or Y?")
+  - Modifiers: unsupported modifier for item
+  - Stock: item out of stock / insufficient quantity
+  - Pipeline: generic stage failure
+- Factory helpers: `stt_no_speech()`, `zero_item_matches()`, `ambiguous_match()`, `item_out_of_stock()`, etc.
+- Pipeline collects `stage_results` and `user_messages` lists throughout processing — frontend displays them directly
+- Transforms silent failures into recoverable interactions
 
 ### Supporting: Upsell Engine (`upsell_engine.py`)
 - Two strategies:
@@ -278,14 +359,19 @@ The `generate_synthetic_data.py` creates realistic test data:
 
 ## 10. Key Design Decisions
 
-1. **Fully offline** — No OpenAI, no cloud STT, no external APIs. faster-whisper runs on CPU locally.
-2. **Dynamic menu matching** — Item matcher reads entirely from DB, no hardcoded menu items. Adding items to DB automatically makes them matchable.
-3. **Multi-turn sessions** — Voice ordering supports accumulating items across multiple voice inputs with session persistence and 30-min timeout.
-4. **Hindi/Hinglish first** — Devanagari transliteration, Hindi number words, Hindi filler word removal, Hindi aliases in DB.
-5. **Rule-based NLP** — No LLMs. Intent classification via regex, quantity via positional parsing, modifiers via pattern matching. Fast, deterministic, predictable.
-6. **FP-Growth for combos** — Real ML (association rule mining) instead of simple co-occurrence counting, with fallback if data is insufficient.
-7. **BCG matrix for menu** — Standard restaurant industry framework (Star/Plowhorse/Puzzle/Dog) adapted to automatic classification.
-8. **Thread-safe caching** — Combo results cached 5 min, session store has max 500 sessions to prevent memory leaks.
+1. **Fully offline** — No OpenAI, no cloud STT, no external APIs. faster-whisper, Silero VAD, sentence-transformers, and FAISS all run on CPU locally.
+2. **Hybrid matching** — Item matcher combines RapidFuzz fuzzy matching (0.4 weight) with sentence-transformer semantic vectors + FAISS (0.6 weight). Phonetic mishearings like "chikken" are rescued by semantic similarity even when edit distance fails.
+3. **Dynamic menu matching** — Item matcher reads entirely from DB, no hardcoded menu items. Adding items to DB automatically makes them matchable and semantically indexed.
+4. **Multi-turn sessions with persistence** — Voice ordering supports accumulating items across multiple voice inputs. Sessions persist across server restarts via Redis (preferred) or database fallback. Multi-worker safe.
+5. **Hindi/Hinglish first** — Devanagari transliteration, Hindi number words, Hindi filler word removal, Hindi aliases in DB. The multilingual sentence-transformer handles "murgh", "चिकन", and "chicken" as near-synonyms natively.
+6. **Compound intent handling** — Single utterances like "cancel the naan but keep the dal" are split into clauses and each classified independently.
+7. **Structured error recovery** — Every pipeline stage returns typed `StageResult` objects with user-facing messages. Zero-match → top-3 suggestions. Ambiguous → "Did you mean X or Y?". Out of stock → explicit notification.
+8. **VAD preprocessing** — Silero VAD filters restaurant noise before Whisper, preventing hallucinations from kitchen sounds, music, and background conversations.
+9. **Rule-based NLP** — No LLMs for intent classification. Regex patterns with compound clause splitting. Fast, deterministic, predictable.
+10. **FP-Growth for combos** — Real ML (association rule mining) instead of simple co-occurrence counting, with fallback if data is insufficient.
+11. **BCG matrix for menu** — Standard restaurant industry framework (Star/Plowhorse/Puzzle/Dog) adapted to automatic classification.
+12. **Thread-safe caching** — Combo results cached 5 min, session store has max 500 sessions to prevent memory leaks.
+13. **Centralized voice config** — All tuning parameters (thresholds, weights, model names, limits) live in `voice_config.py` with env-var overrides. Zero hardcoded magic numbers across voice modules.
 
 ---
 
@@ -295,10 +381,22 @@ The `generate_synthetic_data.py` creates realistic test data:
 - Built in a 48-hour hackathon by a 4-person team
 - PostgreSQL via Supabase for production, SQLite fallback for local dev
 - Tests exist: `test_audio.py`, `test_pipeline.py`, `test_realdb.py`
+- **Implemented since initial build**:
+  - Hybrid fuzzy + semantic item matching (sentence-transformers + FAISS)
+  - Silero VAD preprocessing for noise filtering
+  - Compound intent classification (clause splitting)
+  - Modifier target resolution (explicit/positional/proximity/global)
+  - Structured error taxonomy with user-facing recovery messages
+  - Persistent session store (Redis → DB → memory fallback)
+  - VoiceSession DB model for session persistence
+  - Centralized `voice_config.py` with ~45 env-overridable parameters (STT, VAD, matcher, upsell, sessions)
+  - Staff, RestaurantTable, Shift, Ingredient, StockLog models
+- **Not yet implemented**:
+  - Local LLM for intent classification (Ollama/Qwen2/Phi-3 — still regex-only)
 - No CI/CD pipeline
 - No Docker configuration
 - No authentication/authorization
-- CORS is fully open (allows all origins)
+- CORS configured via `CORS_ORIGINS` env var (defaults to localhost)
 
 ---
 
@@ -309,7 +407,7 @@ The `generate_synthetic_data.py` creates realistic test data:
 | Backend core | 4 (main, database, models, requirements) |
 | Backend API routes | 3 (init, routes_revenue, routes_voice) |
 | Backend data | 2 (schema.sql, generate_synthetic_data) |
-| Voice modules | 10 (init + 9 modules) |
+| Voice modules | 12 (init + 11 modules incl. vad.py, pipeline_errors.py, voice_config.py) |
 | Revenue modules | 8 (init + 7 modules) |
 | Frontend core | 5 (index.html, package.json, vite.config, main.jsx, App.jsx, index.css, client.js) |
 | Frontend pages | 4 |

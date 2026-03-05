@@ -287,6 +287,41 @@ class MenuItemIngredient(Base):
     ingredient = relationship("Ingredient", back_populates="menu_item_ingredients")
 
 
+class VoiceSession(Base):
+    """Persistent voice-ordering session — survives server restarts."""
+
+    __tablename__ = "voice_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(100), unique=True, nullable=False, index=True)
+    last_active = Column(Float, nullable=False)  # Unix timestamp
+    order_items = Column(JSON, default=list)
+    last_items = Column(JSON, default=list)
+    turn_count = Column(Integer, default=0)
+    confirmed = Column(Boolean, default=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "last_active": self.last_active,
+            "order_items": self.order_items or [],
+            "last_items": self.last_items or [],
+            "turn_count": self.turn_count,
+            "confirmed": self.confirmed,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "VoiceSession":
+        return cls(
+            session_id=d["session_id"],
+            last_active=d.get("last_active", 0.0),
+            order_items=d.get("order_items", []),
+            last_items=d.get("last_items", []),
+            turn_count=d.get("turn_count", 0),
+            confirmed=d.get("confirmed", False),
+        )
+
+
 class StockLog(Base):
     """Audit trail for every inventory change — purchase, usage, waste, adjustment."""
 

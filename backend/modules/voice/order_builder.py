@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from models import Order, OrderItem, KOT
+from modules.voice.voice_config import cfg
 
 logger = logging.getLogger("petpooja.voice.order_builder")
 
@@ -77,8 +78,8 @@ def build_order(
         "item_count": len(order_items),
         "total_quantity": sum(i["quantity"] for i in order_items),
         "subtotal": round(total, 2),
-        "tax": round(total * 0.05, 2),  # 5% GST
-        "total": round(total * 1.05, 2),
+        "tax": round(total * cfg.ORDER_TAX_RATE, 2),
+        "total": round(total * (1 + cfg.ORDER_TAX_RATE), 2),
         "order_type": order_type,
         "table_number": table_number,
         "status": "building",

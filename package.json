@@ -1,0 +1,26 @@
+{
+  "name": "sizzle",
+  "version": "1.0.0",
+  "description": "**Restaurant Revenue Intelligence & Voice Ordering** — v0.1.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shlokkvaishnav/pet-pooja.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/shlokkvaishnav/pet-pooja/issues"
+  },
+  "homepage": "https://github.com/shlokkvaishnav/pet-pooja#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

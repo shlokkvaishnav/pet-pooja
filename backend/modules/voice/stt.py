@@ -2,6 +2,7 @@
 stt.py — Speech-to-Text using faster-whisper + Silero VAD
 ===========================================================
 Runs 100% locally — no external API calls.
+Model loaded once on first use, cached forever.
 
 Pipeline:
 1. Convert any audio to 16kHz mono WAV (ffmpeg)
@@ -9,21 +10,35 @@ Pipeline:
 3. Whisper transcription on cleaned audio
 4. Per-segment confidence scoring with minimum threshold
 
+Model selection (via WHISPER_MODEL env var):
+  tiny          ~75MB   fastest, lowest accuracy
+  base          ~145MB  fast, basic accuracy
+  small         ~460MB  good balance (old default)
+  medium        ~1.5GB  better accuracy
+  large-v3-turbo ~809MB best balance — DEFAULT (fast + accurate)
+  large-v3       ~3GB   highest accuracy, slowest on CPU
+
 Requires: pip install faster-whisper torch + ffmpeg installed.
 """
 
+import asyncio
 import os
 import subprocess
 import shutil
 import glob
 import logging
 
+from .voice_config import cfg
+
 logger = logging.getLogger("petpooja.voice.stt")
+
+# Model name — from centralized config (env-overridable)
+_WHISPER_MODEL = cfg.WHISPER_MODEL
 
 # ── Confidence threshold ──
 # Below this, the system flags the transcript as low-confidence
 # and asks the user to repeat rather than guessing wrong.
-MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.45"))
+MIN_CONFIDENCE = cfg.STT_MIN_CONFIDENCE
 
 
 def _find_ffmpeg() -> str:
@@ -51,12 +66,29 @@ _model = None
 
 
 def _get_model():
-    """Load Whisper model on demand. Cached after first call."""
+    """Load Whisper model on demand. Cached after first call.
+    
+    Auto-detects CUDA; falls back to CPU with int8 quantization.
+    Model size controlled by WHISPER_MODEL env var (default: large-v3-turbo).
+    """
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
-        logger.info("Loading faster-whisper model (small)...")
-        _model = WhisperModel("small", device="cpu", compute_type="int8")
+        # Try CUDA first, fall back to CPU
+        try:
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                device, compute_type = "cuda", "float16"
+            else:
+                device, compute_type = "cpu", "int8"
+        except Exception:
+            device, compute_type = "cpu", "int8"
+
+        logger.info(
+            "Loading faster-whisper model '%s' on %s (%s)...",
+            _WHISPER_MODEL, device, compute_type
+        )
+        _model = WhisperModel(_WHISPER_MODEL, device=device, compute_type=compute_type)
         logger.info("Model loaded — runs fully offline from now on")
     return _model
 
@@ -66,6 +98,7 @@ def convert_to_wav(input_path: str) -> str:
     Browser MediaRecorder produces webm/opus.
     Whisper needs WAV 16kHz mono.
     Converts any audio format to WAV using ffmpeg (local tool).
+    Synchronous version — used by the Whisper pipeline.
     """
     output_path = input_path.rsplit(".", 1)[0] + "_converted.wav"
     ffmpeg_path = _find_ffmpeg()
@@ -79,12 +112,41 @@ def convert_to_wav(input_path: str) -> str:
     return output_path
 
 
-# Romanized-Hindi prompt: biases Whisper to output Latin script for Hinglish
+async def convert_to_wav_async(input_path: str) -> str:
+    """
+    Async version of convert_to_wav.
+    Uses asyncio.create_subprocess_exec so the event loop can serve
+    other requests while ffmpeg runs (important for concurrent voice orders).
+    """
+    output_path = input_path.rsplit(".", 1)[0] + "_converted.wav"
+    ffmpeg_path = _find_ffmpeg()
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg_path, "-y",
+        "-i", input_path,
+        "-ar", "16000",
+        "-ac", "1",
+        output_path,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
+    return output_path
+
+
+# Romanized-Hindi + Indian-English prompt:
+# Biases Whisper toward correct spellings even with Indian accents.
+# Includes common mispronounced words (chicken, mutton, biryani, etc.)
+# so the model learns the expected vocabulary before transcribing.
 _INITIAL_PROMPT = (
-    "Bhaiya do paneer tikka aur ek butter naan dena. "
+    "Order for chicken biryani, mutton curry, paneer tikka, butter naan. "
     "Ek chicken biryani extra spicy aur do mango lassi chahiye. "
+    "Bhaiya do paneer tikka aur ek butter naan dena. "
     "Teen roti aur dal makhani please. "
-    "Boss ek gulab jamun aur masala chai dena."
+    "One chicken tikka masala, two garlic naan, and one gulab jamun. "
+    "Dahi kebab, tandoori chicken, fish curry, prawn masala. "
+    "Cold drink, masala chai, lassi, cold coffee. "
+    "Boss ek gulab jamun aur masala chai dena. "
+    "Half plate chicken, full plate mutton, chicken 65, chicken manchurian."
 )
 
 
@@ -155,7 +217,7 @@ def transcribe(audio_path: str) -> dict:
 
         if not vad_info["has_speech"]:
             # No speech detected — return early with explicit flag
-            _cleanup(wav_path, audio_path)
+            _cleanup(wav_path)
             return {
                 "transcript": "",
                 "detected_language": "unknown",
@@ -178,11 +240,13 @@ def transcribe(audio_path: str) -> dict:
     model = _get_model()
     segments_gen, info = model.transcribe(
         transcribe_path,
-        beam_size=5,
-        language=None,        # auto-detect language
+        beam_size=cfg.STT_BEAM_SIZE,
+        language=None,                    # auto-detect language
         task="transcribe",
-        vad_filter=False,     # we already did VAD externally
-        initial_prompt=_INITIAL_PROMPT,
+        vad_filter=cfg.STT_VAD_FILTER,    # we already did VAD externally
+        initial_prompt=_INITIAL_PROMPT,   # bias toward correct food vocabulary
+        condition_on_previous_text=cfg.STT_CONDITION_ON_PREV,
+        temperature=cfg.STT_TEMPERATURE,  # deterministic — best for short commands
     )
 
     # Step 4: Collect segments and compute confidence
@@ -202,10 +266,10 @@ def transcribe(audio_path: str) -> dict:
             overall_confidence, MIN_CONFIDENCE, transcript[:80],
         )
 
-    # Cleanup temp files
-    _cleanup(wav_path, audio_path)
+    # Cleanup temp files (NOT the original audio!)
+    _cleanup(wav_path)
     if transcribe_path != wav_path:
-        _cleanup(transcribe_path, None)
+        _cleanup(transcribe_path)
 
     return {
         "transcript": transcript.strip(),

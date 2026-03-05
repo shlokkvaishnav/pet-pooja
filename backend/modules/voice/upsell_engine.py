@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from models import MenuItem, SaleTransaction
+from modules.voice.voice_config import cfg
 
 logger = logging.getLogger("petpooja.voice.upsell")
 
@@ -21,7 +22,7 @@ def get_upsell_suggestions(
     menu_data: list[dict],
     combo_rules: list[dict] = None,
     hidden_stars: list[dict] = None,
-    max_suggestions: int = 2,
+    max_suggestions: int = cfg.UPSELL_MAX_SUGGESTIONS,
 ) -> list[dict]:
     """
     Generate upsell suggestions for the current order.
@@ -31,10 +32,10 @@ def get_upsell_suggestions(
         menu_data: All menu items from DB
         combo_rules: Association rules from combo_engine
         hidden_stars: Hidden star items from analysis
-        max_suggestions: Max suggestions to return (default 2)
+        max_suggestions: Max suggestions to return
 
     Returns:
-        List of upsell suggestion dicts, max 2
+        List of upsell suggestion dicts
     """
     if not current_order_items:
         return []
@@ -77,7 +78,7 @@ def get_upsell_suggestions(
 
     # ── Strategy 2: Hidden star promotion ──
     if hidden_stars:
-        for star in hidden_stars[:5]:  # Check top 5 hidden stars
+        for star in hidden_stars[:cfg.UPSELL_HIDDEN_STARS_POOL]:  # Check top hidden stars
             star_name = star.get("name", "")
             star_id = star.get("item_id") or star.get("id")
 
@@ -90,7 +91,7 @@ def get_upsell_suggestions(
                 continue
 
             cm_pct = star.get("cm_pct", star.get("margin_pct", 0))
-            score = cm_pct * 0.5  # Lower base score than combo-based
+            score = cm_pct * cfg.UPSELL_HIDDEN_STAR_WEIGHT  # Lower base score than combo-based
 
             suggestions.append({
                 "item_id": star_id,
@@ -112,8 +113,8 @@ def get_upsell_suggestions(
 def suggest_upsells(
     db: Session,
     ordered_item_ids: list[int],
-    max_suggestions: int = 2,
-    min_margin_pct: float = 55.0,
+    max_suggestions: int = cfg.UPSELL_MAX_SUGGESTIONS,
+    min_margin_pct: float = cfg.UPSELL_MIN_MARGIN_PCT,
 ) -> list[dict]:
     """
     Suggest upsell items based on co-occurrence data from DB.
@@ -136,7 +137,7 @@ def suggest_upsells(
         db.query(SaleTransaction.order_id)
         .filter(SaleTransaction.item_id.in_(ordered_item_ids))
         .distinct()
-        .limit(500)
+        .limit(cfg.UPSELL_RELATED_ORDERS_LIMIT)
         .all()
     )
     related_orders = [r[0] for r in related_order_ids]
@@ -156,7 +157,7 @@ def suggest_upsells(
         )
         .group_by(SaleTransaction.item_id)
         .order_by(func.count(SaleTransaction.id).desc())
-        .limit(20)
+        .limit(cfg.UPSELL_CO_ITEMS_LIMIT)
         .all()
     )
 
@@ -212,7 +213,7 @@ def _fallback_suggestions(
 
     scored = []
     for item in items:
-        if item.margin_pct >= 60:
+        if item.margin_pct >= cfg.UPSELL_FALLBACK_MARGIN:
             scored.append({
                 "item_id": item.id,
                 "name": item.name,

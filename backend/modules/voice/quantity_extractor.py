@@ -6,6 +6,8 @@ Hindi numbers are LANGUAGE constants, not restaurant data.
 
 import re
 
+from .voice_config import cfg
+
 HINDI_NUMBERS = {
     # Hindi / Hinglish
     "ek": 1, "ak": 1,
@@ -43,8 +45,8 @@ def extract_quantity(text: str, item_position: int, tokens: list) -> int:
     the matched item's position in the token list.
     Default: 1.
     """
-    start = max(0, item_position - 3)
-    end = min(len(tokens), item_position + 4)
+    start = max(0, item_position - cfg.QTY_WINDOW_BEFORE)
+    end = min(len(tokens), item_position + cfg.QTY_WINDOW_AFTER)
     window = tokens[start:end]
 
     # Check for range pattern (e.g., "2-3 naan" -> use higher value)
@@ -60,10 +62,10 @@ def extract_quantity(text: str, item_position: int, tokens: list) -> int:
             return int(val) if val >= 1 else 1
         if token.isdigit():
             val = int(token)
-            if 1 <= val <= 50:
+            if 1 <= val <= cfg.QTY_MAX_VALID:
                 return val
 
-    return 1
+    return cfg.QTY_DEFAULT
 
 
 def extract_quantities_for_items(text: str, matched_items: list) -> list:

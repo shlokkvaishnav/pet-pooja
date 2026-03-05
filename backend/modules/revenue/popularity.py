@@ -5,7 +5,9 @@ Calculates how frequently each item is ordered,
 daily velocity, and a normalized popularity score.
 """
 
-from sqlalchemy.orm import Session
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from models import MenuItem, SaleTransaction
@@ -29,13 +31,15 @@ def calculate_popularity(db: Session, days: int = 30) -> list[dict]:
         }
     ]
     """
-    # Aggregate sales per item
+    # Aggregate sales per item — filtered to recent window
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     sales_data = (
         db.query(
             SaleTransaction.item_id,
             func.sum(SaleTransaction.quantity).label("total_qty"),
             func.count(SaleTransaction.id).label("order_count"),
         )
+        .filter(SaleTransaction.sold_at >= cutoff)
         .group_by(SaleTransaction.item_id)
         .all()
     )
@@ -48,8 +52,13 @@ def calculate_popularity(db: Session, days: int = 30) -> list[dict]:
         for row in sales_data
     }
 
-    # Get all items
-    items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
+    # Get all items — eagerly load category to avoid N+1
+    items = (
+        db.query(MenuItem)
+        .options(joinedload(MenuItem.category))
+        .filter(MenuItem.is_available == True)
+        .all()
+    )
 
     results = []
 

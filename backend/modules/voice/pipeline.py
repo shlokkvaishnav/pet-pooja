@@ -6,6 +6,9 @@ No hardcoded menu items anywhere. All processing is local.
 """
 
 import uuid
+import logging
+
+logger = logging.getLogger("petpooja.voice.pipeline")
 
 from .stt import transcribe
 from .normalizer import normalize
@@ -81,25 +84,27 @@ class VoicePipeline:
             sr = errs.stt_model_error(str(e))
             return self._error_response(sr, session_id=session_id)
 
-        # If VAD found no speech or Whisper confidence is too low,
-        # return early with an explicit "please repeat" signal.
+        # Hard-abort only when there's truly nothing to work with
+        # (no speech detected or completely empty transcript).
+        # For "below_threshold" confidence, still attempt item extraction —
+        # accented / mixed-language audio often has low avg_logprob
+        # but produces a perfectly usable transcript.
         if stt_result.get("is_low_confidence"):
             reason = stt_result.get("low_confidence_reason", "unknown")
-            if reason == "no_speech_detected":
-                sr = errs.stt_no_speech()
-            elif reason == "empty_transcript":
-                sr = errs.stt_too_short()
-            else:
-                sr = errs.stt_low_confidence(
-                    stt_result.get("transcript", ""),
-                    stt_result.get("transcription_confidence", 0.0),
+            if reason in ("no_speech_detected", "empty_transcript"):
+                sr = (errs.stt_no_speech() if reason == "no_speech_detected"
+                      else errs.stt_too_short())
+                return self._error_response(
+                    sr, session_id=session_id,
+                    transcript=stt_result.get("transcript", ""),
+                    detected_language=stt_result.get("detected_language", "unknown"),
+                    transcription_confidence=stt_result.get("transcription_confidence", 0.0),
+                    vad_info=stt_result.get("vad_info"),
                 )
-            return self._error_response(
-                sr, session_id=session_id,
-                transcript=stt_result.get("transcript", ""),
-                detected_language=stt_result.get("detected_language", "unknown"),
-                transcription_confidence=stt_result.get("transcription_confidence", 0.0),
-                vad_info=stt_result.get("vad_info"),
+            # below_threshold — proceed with extraction, flag advisory
+            logger.info(
+                "Low STT confidence (%.2f) — proceeding with extraction anyway",
+                stt_result.get("transcription_confidence", 0.0),
             )
 
         return self._run_pipeline(

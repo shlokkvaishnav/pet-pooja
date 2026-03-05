@@ -57,6 +57,65 @@ def _transliterate_devanagari(text: str) -> str:
     return text
 
 
+# ---------------------------------------------------------------------------
+# Phonetic correction map — common Indian-accent / STT mishearings
+# ---------------------------------------------------------------------------
+# Applied AFTER Devanagari transliteration, BEFORE fuzzy matching.
+# Maps whole-word phonetic variants to standard English food spellings.
+# Only maps words that are clearly food-related; avoids overcorrecting.
+PHONETIC_CORRECTIONS = {
+    # Chicken variants
+    "chikan": "chicken", "chiken": "chicken", "chikken": "chicken",
+    "chikn": "chicken", "chickan": "chicken", "chikin": "chicken",
+    "chkin": "chicken", "chickn": "chicken", "chekin": "chicken",
+    "murgh": "chicken", "murg": "chicken",
+    # Mutton variants
+    "mutan": "mutton", "muton": "mutton", "muten": "mutton",
+    "mattan": "mutton", "gosht": "mutton",
+    # Paneer variants
+    "paner": "paneer", "panir": "paneer", "pneer": "paneer",
+    "pnir": "paneer",
+    # Biryani variants
+    "biriyani": "biryani", "briyani": "biryani", "biryni": "biryani",
+    "biriani": "biryani", "bryani": "biryani", "biriyanee": "biryani",
+    # Naan variants
+    "nan": "naan", "naaan": "naan",
+    # Roti variants
+    "rotee": "roti", "rooti": "roti", "rodi": "roti", "rodi": "roti",
+    "rothi": "roti",
+    # Tikka variants
+    "tika": "tikka", "teeka": "tikka", "tikkah": "tikka",
+    # Dal variants
+    "daal": "dal", "dhal": "dal",
+    # Kebab variants
+    "kabab": "kebab", "kabob": "kebab", "kebob": "kebab",
+    "kabeb": "kebab",
+    # Masala variants
+    "masale": "masala", "msala": "masala", "masla": "masala",
+    # Curry variants
+    "kari": "curry", "karri": "curry",
+    # Lassi variants
+    "lasi": "lassi", "lassee": "lassi",
+    # Chai variants
+    "chay": "chai", "chae": "chai",
+    # Tandoori variants
+    "tanduri": "tandoori", "tanduri": "tandoori", "tndoori": "tandoori",
+    # Makhani variants
+    "makhni": "makhani", "makni": "makhani", "makhane": "makhani",
+    # Kulfi variants
+    "kulfee": "kulfi",
+}
+
+_PHONETIC_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(PHONETIC_CORRECTIONS, key=len, reverse=True)) + r")\b"
+)
+
+
+def _apply_phonetic_corrections(text: str) -> str:
+    """Replace phonetic variants with standard food spellings (whole-word only)."""
+    return _PHONETIC_RE.sub(lambda m: PHONETIC_CORRECTIONS[m.group(0)], text)
+
+
 # Number words -> integer
 # Covers Hindi, Gujarati, Marathi romanized variants
 NUMBER_WORDS = {
@@ -127,6 +186,10 @@ def normalize(text: str) -> str:
 
     # Transliterate Devanagari -> romanized BEFORE number/filler processing
     text = _transliterate_devanagari(text)
+
+    # Apply phonetic corrections for Indian-accent STT mishearings
+    # e.g. "chikan" → "chicken", "biriyani" → "biryani"
+    text = _apply_phonetic_corrections(text)
 
     # Replace number words with digits (Hindi, Gujarati, Marathi, English)
     tokens = text.split()

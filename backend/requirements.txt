@@ -8,7 +8,7 @@ python-multipart
 
 # Database (Supabase PostgreSQL)
 sqlalchemy==2.0.36
-psycopg2-binary==2.9.10
+psycopg2-binary>=2.9.10
 
 # Data processing
 pandas
@@ -22,12 +22,24 @@ faster-whisper
 
 # Voice Activity Detection -- filters noise before Whisper (fully local)
 torch
+torchaudio
 
 # Fuzzy text matching (Person B - item matching)
 rapidfuzz
 
+# Semantic vector matching — hybrid fuzzy+semantic for accent robustness
+# paraphrase-multilingual-MiniLM-L12-v2 model downloads ~420MB on first run
+sentence-transformers>=2.7.0
+faiss-cpu>=1.8.0
+
 # Audio handling
 pydub
+
+# Session persistence — Redis preferred, DB fallback built-in
+redis>=5.0.0
+
+# JWT authentication
+PyJWT>=2.8.0
 
 # Utilities
 python-dotenv
