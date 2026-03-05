@@ -27,15 +27,17 @@ import shutil
 import glob
 import logging
 
+from .voice_config import cfg
+
 logger = logging.getLogger("petpooja.voice.stt")
 
-# Model name — override via WHISPER_MODEL env var
-_WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+# Model name — from centralized config (env-overridable)
+_WHISPER_MODEL = cfg.WHISPER_MODEL
 
 # ── Confidence threshold ──
 # Below this, the system flags the transcript as low-confidence
 # and asks the user to repeat rather than guessing wrong.
-MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.45"))
+MIN_CONFIDENCE = cfg.STT_MIN_CONFIDENCE
 
 
 def _find_ffmpeg() -> str:
@@ -215,13 +217,13 @@ def transcribe(audio_path: str) -> dict:
     model = _get_model()
     segments_gen, info = model.transcribe(
         transcribe_path,
-        beam_size=5,
+        beam_size=cfg.STT_BEAM_SIZE,
         language=None,                    # auto-detect language
         task="transcribe",
-        vad_filter=False,                 # we already did VAD externally
+        vad_filter=cfg.STT_VAD_FILTER,    # we already did VAD externally
         initial_prompt=_INITIAL_PROMPT,   # bias toward correct food vocabulary
-        condition_on_previous_text=False, # prevents hallucination loops
-        temperature=0.0,                  # deterministic — best for short commands
+        condition_on_previous_text=cfg.STT_CONDITION_ON_PREV,
+        temperature=cfg.STT_TEMPERATURE,  # deterministic — best for short commands
     )
 
     # Step 4: Collect segments and compute confidence

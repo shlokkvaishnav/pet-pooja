@@ -23,6 +23,8 @@ import numpy as np
 from rapidfuzz import process, fuzz
 from typing import Optional
 
+from .voice_config import cfg
+
 logger = logging.getLogger("petpooja.voice.item_matcher")
 
 # Digits-only token pattern — used to strip leading/trailing numbers from phrases
@@ -50,12 +52,12 @@ SKIP_WORDS = {"aur", "and", "or", "ya", "bhi", "with", "dena", "lao",
               "और", "या", "भी", "देना", "दे", "लाओ", "चाहिए",
               "भैया", "भइया", "भाई", "जी", "हाँ", "हां"}
 
-# Blend weights — must sum to 1.0
-_FUZZY_WEIGHT = 0.4
-_SEMANTIC_WEIGHT = 0.6
+# Blend weights — from config (env-overridable)
+_FUZZY_WEIGHT = cfg.ITEM_MATCH_FUZZY_WEIGHT
+_SEMANTIC_WEIGHT = cfg.ITEM_MATCH_SEMANTIC_WEIGHT
 
-# Model name — small, multilingual, ~420MB, fully offline
-_SEMANTIC_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+# Model name — from config (env-overridable)
+_SEMANTIC_MODEL_NAME = cfg.ITEM_MATCH_SEMANTIC_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ class _SemanticIndex:
             try:
                 from sentence_transformers import SentenceTransformer
                 logger.info("Loading semantic model '%s'...", _SEMANTIC_MODEL_NAME)
-                self._model = SentenceTransformer(_SEMANTIC_MODEL_NAME)
+                self._model = SentenceTransformer(cfg.ITEM_MATCH_SEMANTIC_MODEL)
                 logger.info("Semantic model loaded — fully offline from now on")
             except Exception as e:
                 logger.warning("Could not load semantic model: %s — falling back to fuzzy-only", e)
@@ -104,7 +106,7 @@ class _SemanticIndex:
             logger.info("Building semantic index for %d corpus entries...", len(self._keys))
             embeddings = self._model.encode(
                 self._keys,
-                batch_size=64,
+                batch_size=cfg.ITEM_MATCH_ENCODE_BATCH,
                 show_progress_bar=False,
                 convert_to_numpy=True,
                 normalize_embeddings=True,   # L2-normalise → inner product = cosine sim
@@ -136,8 +138,8 @@ class _SemanticIndex:
                 normalize_embeddings=True,
             ).astype(np.float32)
 
-            # Search top-20 to find the best match that belongs to our item_id
-            k = min(20, len(self._keys))
+            # Search top-k to find the best match that belongs to our item_id
+            k = min(cfg.ITEM_MATCH_FAISS_TOP_K, len(self._keys))
             scores, indices = self._index.search(vec, k)
 
             best = 0.0
@@ -227,10 +229,10 @@ def build_search_corpus(menu_items: list) -> dict:
 # ---------------------------------------------------------------------------
 
 # Confidence threshold below which we flag for disambiguation
-DISAMBIGUATION_THRESHOLD = 0.85
+DISAMBIGUATION_THRESHOLD = cfg.ITEM_MATCH_DISAMBIGUATION
 
 
-def match_item(text: str, corpus: dict, threshold: int = 70) -> Optional[dict]:
+def match_item(text: str, corpus: dict, threshold: int = cfg.ITEM_MATCH_FUZZY_THRESHOLD) -> Optional[dict]:
     """
     Hybrid match: RapidFuzz (fuzzy) + Sentence-Transformer (semantic).
 
@@ -247,7 +249,7 @@ def match_item(text: str, corpus: dict, threshold: int = 70) -> Optional[dict]:
         return None
 
     text_clean = text.strip().lower()
-    if text_clean in SKIP_WORDS or len(text_clean) < 2:
+    if text_clean in SKIP_WORDS or len(text_clean) < cfg.ITEM_MATCH_MIN_TOKEN_LEN:
         return None
 
     # Strip leading/trailing digit tokens (quantities added by normalizer)
@@ -261,7 +263,7 @@ def match_item(text: str, corpus: dict, threshold: int = 70) -> Optional[dict]:
         return None
     text_clean = " ".join(parts)
 
-    if text_clean in SKIP_WORDS or len(text_clean) < 2:
+    if text_clean in SKIP_WORDS or len(text_clean) < cfg.ITEM_MATCH_MIN_TOKEN_LEN:
         return None
 
     # Reject multi-word phrases that contain a filler/skip word.
@@ -287,7 +289,7 @@ def match_item(text: str, corpus: dict, threshold: int = 70) -> Optional[dict]:
         # E.g. "chicken" doesn't fuzzy-match "chicken tikka" well with
         # token_sort_ratio, but if "chicken" appears as a whole word in
         # a corpus key, that's a strong signal.
-        if len(tokens) == 1 and tokens[0] not in SKIP_WORDS and len(tokens[0]) >= 4:
+        if len(tokens) == 1 and tokens[0] not in SKIP_WORDS and len(tokens[0]) >= cfg.ITEM_MATCH_MIN_SINGLE_WORD:
             word = tokens[0]
             # Find all corpus entries containing our word
             candidates = [
@@ -344,7 +346,7 @@ def _build_result(
 
     if final_score < DISAMBIGUATION_THRESHOLD:
         match_result["needs_disambiguation"] = True
-        match_result["alternatives"] = get_alternatives(original_query, corpus, top_n=3)
+        match_result["alternatives"] = get_alternatives(original_query, corpus, top_n=cfg.ITEM_MATCH_ALT_TOP_N)
     else:
         match_result["needs_disambiguation"] = False
         match_result["alternatives"] = []
@@ -352,7 +354,7 @@ def _build_result(
     return match_result
 
 
-def get_alternatives(text: str, corpus: dict, top_n: int = 3) -> list:
+def get_alternatives(text: str, corpus: dict, top_n: int = cfg.ITEM_MATCH_ALT_TOP_N) -> list:
     """Return top-N hybrid-scored candidates for disambiguation."""
     text_clean = text.strip().lower()
 
@@ -362,7 +364,7 @@ def get_alternatives(text: str, corpus: dict, top_n: int = 3) -> list:
         corpus.keys(),
         scorer=fuzz.token_sort_ratio,
         limit=top_n * 3,   # oversample, will hybrid-score and re-rank
-        score_cutoff=50,
+        score_cutoff=cfg.ITEM_MATCH_ALT_CUTOFF,
     )
 
     # Semantic top-k
@@ -431,7 +433,7 @@ def extract_all_items(text: str, corpus: dict) -> list:
     # Single words = high false positive risk, need high threshold
     # With hybrid scoring 2/3-word windows can use 0.75+; 1-word needs 0.75+
     # (safely lowered from 0.90 because word-in-corpus fallback is precise)
-    MIN_CONF = {3: 0.85, 2: 0.78, 1: 0.75}
+    MIN_CONF = {3: cfg.ITEM_MATCH_MIN_CONF_3W, 2: cfg.ITEM_MATCH_MIN_CONF_2W, 1: cfg.ITEM_MATCH_MIN_CONF_1W}
 
     for window_size in [3, 2, 1]:
         min_confidence = MIN_CONF[window_size]
@@ -459,6 +461,6 @@ def extract_all_items(text: str, corpus: dict) -> list:
         # Try the longest non-skip phrase as the suggestion query
         meaningful = [t for t in tokens if t.lower() not in SKIP_WORDS and len(t) >= 2]
         query = " ".join(meaningful) if meaningful else text
-        extract_all_items._last_fuzzy_suggestions = get_alternatives(query, corpus, top_n=3)
+        extract_all_items._last_fuzzy_suggestions = get_alternatives(query, corpus, top_n=cfg.ITEM_MATCH_ALT_TOP_N)
 
     return result

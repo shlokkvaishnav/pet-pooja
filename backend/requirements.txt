@@ -35,5 +35,8 @@ faiss-cpu>=1.8.0
 # Audio handling
 pydub
 
+# Session persistence — Redis preferred, DB fallback built-in
+redis>=5.0.0
+
 # Utilities
 python-dotenv

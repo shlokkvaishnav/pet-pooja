@@ -13,11 +13,12 @@ Requires: pip install torch (silero-vad ships inside torch.hub)
 """
 
 import logging
-import os
 import struct
 import wave
 
 import torch
+
+from .voice_config import cfg
 
 logger = logging.getLogger("petpooja.voice.vad")
 
@@ -25,17 +26,13 @@ logger = logging.getLogger("petpooja.voice.vad")
 _vad_model = None
 _vad_utils = None
 
-# ── Tuning knobs (env-overridable) ──
-# Minimum speech duration to keep (seconds). Filters out clicks/taps.
-MIN_SPEECH_DURATION = float(os.getenv("VAD_MIN_SPEECH_SEC", "0.3"))
-# Silence padding around each speech segment (seconds). Prevents clipping.
-SPEECH_PAD_MS = int(os.getenv("VAD_SPEECH_PAD_MS", "300"))
-# VAD threshold — higher = stricter (0.0-1.0). Default tuned for noisy restaurants.
-VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.40"))
-# Minimum total speech needed to consider the audio valid (seconds).
-MIN_TOTAL_SPEECH = float(os.getenv("VAD_MIN_TOTAL_SPEECH_SEC", "0.4"))
+# ── Tuning knobs — from centralized config (env-overridable) ──
+MIN_SPEECH_DURATION = cfg.VAD_MIN_SPEECH_SEC
+SPEECH_PAD_MS = cfg.VAD_SPEECH_PAD_MS
+VAD_THRESHOLD = cfg.VAD_THRESHOLD
+MIN_TOTAL_SPEECH = cfg.VAD_MIN_TOTAL_SPEECH_SEC
 
-_SAMPLE_RATE = 16000  # Silero VAD requires 16kHz
+_SAMPLE_RATE = cfg.VAD_SAMPLE_RATE
 
 
 def _load_vad():
