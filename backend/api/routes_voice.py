@@ -9,10 +9,12 @@ import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from database import get_db
 from models import Order
@@ -20,6 +22,9 @@ from modules.voice.order_builder import build_order, generate_kot, save_order_to
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.voice")
+
+# Rate limiter instance — resolved from app state at request time
+_limiter = Limiter(key_func=get_remote_address)
 
 # Max audio file size: 10 MB
 _MAX_AUDIO_SIZE = 10 * 1024 * 1024
@@ -75,7 +80,9 @@ async def _save_audio_temp(audio: UploadFile) -> str:
 # ── 1. POST /api/voice/transcribe ──
 
 @router.post("/transcribe")
+@_limiter.limit("10/minute")
 async def transcribe_audio(
+    request: Request,
     audio: UploadFile = File(...),
 ):
     """
@@ -135,7 +142,9 @@ async def transcribe_audio(
 # ── 2. POST /api/voice/process-audio ──
 
 @router.post("/process-audio")
+@_limiter.limit("10/minute")
 async def process_audio(
+    request: Request,
     audio: UploadFile = File(...),
     session_id: str = None,
     db: Session = Depends(get_db),

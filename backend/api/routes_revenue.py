@@ -10,9 +10,11 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from database import get_db
 from models import MenuItem, SaleTransaction, Category
@@ -21,7 +23,7 @@ from modules.revenue.contribution_margin import calculate_margins
 from modules.revenue.popularity import calculate_popularity
 from modules.revenue.menu_matrix import classify_menu_matrix, get_quadrant_summary
 from modules.revenue.hidden_stars import detect_hidden_stars
-from modules.revenue.combo_engine import generate_combos
+from modules.revenue.combo_engine import generate_combos, fetch_combos_from_db, run_combo_training_background
 from modules.revenue.price_optimizer import generate_price_recommendations
 from modules.revenue.trend_analyzer import (
     calculate_trends,
@@ -39,6 +41,9 @@ from modules.revenue.advanced_analytics import (
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.revenue")
+
+# Rate limiter instance
+_limiter = Limiter(key_func=get_remote_address)
 
 # ── Thread-safe cache for expensive computations ──
 _cache_lock = threading.Lock()
@@ -227,31 +232,40 @@ def get_risk_items(db: Session = Depends(get_db)):
 @router.get("/combos")
 def get_combo_suggestions(
     db: Session = Depends(get_db),
-    force_retrain: bool = Query(False, description="Force retraining of combo model"),
-    discount_pct: float = Query(10.0, ge=1.0, le=30.0, description="Target discount percentage"),
 ):
     """
     GET /api/revenue/combos
-    Returns: top 20 combos from FP-Growth combo engine.
-    Results are cached in DB. Out-of-stock items are filtered.
-    Pass force_retrain=true to retrain on demand.
+    Returns: top 20 combos from pre-computed FP-Growth results in DB.
+    Training runs in the background on startup and on a schedule.
+    Always fast — never blocks on FP-Growth.
     """
     try:
-        if not force_retrain:
-            cached = _get_cached("combos")
-            if cached:
-                return {"combos": cached}
-
-        combos = generate_combos(
-            db,
-            target_discount_pct=discount_pct,
-            force_retrain=force_retrain,
-        )
-        _set_cached("combos", combos)
+        combos = fetch_combos_from_db(db)
         return {"combos": combos}
     except Exception as e:
-        logger.exception("Error generating combos")
-        raise HTTPException(status_code=500, detail=f"Combo generation failed: {e}")
+        logger.exception("Error fetching combos")
+        raise HTTPException(status_code=500, detail=f"Combo fetch failed: {e}")
+
+
+@router.post("/combos/retrain")
+@_limiter.limit("2/minute")
+def retrain_combos(
+    request: Request,
+    db: Session = Depends(get_db),
+    discount_pct: float = Query(10.0, ge=1.0, le=30.0, description="Target discount percentage"),
+):
+    """
+    POST /api/revenue/combos/retrain
+    Trigger an immediate combo retraining in a background thread.
+    Returns immediately — results appear in GET /combos once training completes.
+    """
+    try:
+        from database import SessionLocal
+        run_combo_training_background(SessionLocal)
+        return {"status": "training_started", "message": "Combo retraining started in background"}
+    except Exception as e:
+        logger.exception("Error triggering combo retrain")
+        raise HTTPException(status_code=500, detail=f"Combo retrain failed: {e}")
 
 
 @router.get("/price-recommendations")

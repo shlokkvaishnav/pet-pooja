@@ -40,3 +40,6 @@ redis>=5.0.0
 
 # Utilities
 python-dotenv
+
+# Rate limiting for compute-heavy endpoints
+slowapi>=0.1.9

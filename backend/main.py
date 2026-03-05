@@ -11,6 +11,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from database import engine, Base, SessionLocal
 from api.routes_revenue import router as revenue_router
@@ -38,6 +41,19 @@ async def lifespan(app: FastAPI):
     logger.info("Petpooja AI Copilot — Server ready")
     logger.info("Revenue engine loaded")
 
+    # -- PRE-LOAD: Warm up ML models before the first request arrives --
+    try:
+        from modules.voice.stt import warmup as stt_warmup
+        stt_warmup()
+    except Exception as e:
+        logger.warning(f"Whisper model warmup failed (will lazy-load on first request): {e}")
+
+    try:
+        from modules.voice.item_matcher import warmup_semantic_model
+        warmup_semantic_model()
+    except Exception as e:
+        logger.warning(f"Semantic model warmup failed (will lazy-load on first use): {e}")
+
     # -- DYNAMIC: Load menu from DATABASE --
     db = SessionLocal()
     try:
@@ -62,7 +78,20 @@ async def lifespan(app: FastAPI):
         logger.info("Text-only pipeline will still work")
         app.state.voice_pipeline = None
 
+    # -- Start background combo training scheduler --
+    try:
+        from modules.revenue.combo_engine import start_combo_scheduler
+        start_combo_scheduler(SessionLocal)
+    except Exception as e:
+        logger.warning(f"Combo scheduler failed to start: {e}")
+
     yield
+    # -- Shutdown: stop combo scheduler --
+    try:
+        from modules.revenue.combo_engine import stop_combo_scheduler
+        stop_combo_scheduler()
+    except Exception:
+        pass
     db.close()
     logger.info("Server shutting down...")
 
@@ -73,6 +102,12 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+
+# ── Rate limiter (per-IP) ──
+_RATE_LIMIT_DEFAULT = os.getenv("RATE_LIMIT_DEFAULT", "60/minute")
+limiter = Limiter(key_func=get_remote_address, default_limits=[_RATE_LIMIT_DEFAULT])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
