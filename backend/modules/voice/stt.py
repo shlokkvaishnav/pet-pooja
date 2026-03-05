@@ -1,9 +1,15 @@
 """
-stt.py — Speech-to-Text using faster-whisper
-==============================================
+stt.py — Speech-to-Text using faster-whisper + Silero VAD
+===========================================================
 Runs 100% locally — no external API calls.
-Model loaded once on first use, cached forever.
-Requires: pip install faster-whisper + ffmpeg installed.
+
+Pipeline:
+1. Convert any audio to 16kHz mono WAV (ffmpeg)
+2. VAD preprocessing: strip silence/noise, keep speech-only segments
+3. Whisper transcription on cleaned audio
+4. Per-segment confidence scoring with minimum threshold
+
+Requires: pip install faster-whisper torch + ffmpeg installed.
 """
 
 import os
@@ -13,6 +19,11 @@ import glob
 import logging
 
 logger = logging.getLogger("petpooja.voice.stt")
+
+# ── Confidence threshold ──
+# Below this, the system flags the transcript as low-confidence
+# and asks the user to repeat rather than guessing wrong.
+MIN_CONFIDENCE = float(os.getenv("STT_MIN_CONFIDENCE", "0.45"))
 
 
 def _find_ffmpeg() -> str:
@@ -77,34 +88,142 @@ _INITIAL_PROMPT = (
 )
 
 
+def _compute_segment_confidence(segments_list: list) -> tuple[str, float, list]:
+    """
+    Collect segments, compute per-segment avg_logprob, and derive
+    an overall confidence score.
+
+    Returns: (transcript, overall_confidence, segment_details)
+    """
+    segment_details = []
+    all_text_parts = []
+    weighted_sum = 0.0
+    total_duration = 0.0
+
+    for seg in segments_list:
+        text = seg.text.strip()
+        if not text:
+            continue
+        duration = seg.end - seg.start
+        # avg_logprob is log-probability; convert to 0-1 range
+        # typical range: -1.0 (bad) to 0.0 (perfect)
+        prob = min(1.0, max(0.0, 1.0 + seg.avg_logprob))
+
+        all_text_parts.append(text)
+        weighted_sum += prob * duration
+        total_duration += duration
+        segment_details.append({
+            "text": text,
+            "start": round(seg.start, 2),
+            "end": round(seg.end, 2),
+            "confidence": round(prob, 3),
+            "no_speech_prob": round(seg.no_speech_prob, 3),
+        })
+
+    transcript = " ".join(all_text_parts)
+    overall_confidence = (weighted_sum / total_duration) if total_duration > 0 else 0.0
+
+    return transcript, round(overall_confidence, 3), segment_details
+
+
 def transcribe(audio_path: str) -> dict:
     """
-    Takes any audio file path.
-    Returns transcript + detected language.
-    language=None means Whisper auto-detects (handles EN, HI, Hinglish).
-    initial_prompt biases Whisper toward romanized Hinglish output.
+    Full STT pipeline: audio file → VAD preprocessing → Whisper → confidence check.
+
+    Returns:
+        {
+            "transcript": str,
+            "detected_language": str,
+            "language_confidence": float,
+            "transcription_confidence": float,   # 0.0-1.0 overall score
+            "is_low_confidence": bool,            # True = ask user to repeat
+            "segments": [...],                    # per-segment detail
+            "vad_info": {...},                    # VAD preprocessing stats
+        }
     """
-    # Convert to WAV first (handles webm, mp3, m4a, etc.)
+    # Step 1: Convert to WAV
     wav_path = convert_to_wav(audio_path)
 
+    # Step 2: VAD preprocessing — strip noise, keep only speech
+    vad_info = None
+    transcribe_path = wav_path  # default: send full WAV to Whisper
+
+    try:
+        from .vad import extract_speech_audio
+        vad_output_path = wav_path.rsplit(".", 1)[0] + "_vad.wav"
+        vad_info = extract_speech_audio(wav_path, vad_output_path)
+
+        if not vad_info["has_speech"]:
+            # No speech detected — return early with explicit flag
+            _cleanup(wav_path, audio_path)
+            return {
+                "transcript": "",
+                "detected_language": "unknown",
+                "language_confidence": 0.0,
+                "transcription_confidence": 0.0,
+                "is_low_confidence": True,
+                "low_confidence_reason": "no_speech_detected",
+                "segments": [],
+                "vad_info": vad_info,
+            }
+
+        # Use cleaned (speech-only) audio for Whisper
+        transcribe_path = vad_output_path
+
+    except Exception as e:
+        logger.warning("VAD preprocessing failed, using raw audio: %s", e)
+        vad_info = {"error": str(e), "has_speech": True}
+
+    # Step 3: Whisper transcription on cleaned audio
     model = _get_model()
-    segments, info = model.transcribe(
-        wav_path,
+    segments_gen, info = model.transcribe(
+        transcribe_path,
         beam_size=5,
         language=None,        # auto-detect language
         task="transcribe",
-        vad_filter=True,      # removes silent parts
-        initial_prompt=_INITIAL_PROMPT,  # bias toward romanized Hinglish
+        vad_filter=False,     # we already did VAD externally
+        initial_prompt=_INITIAL_PROMPT,
     )
 
-    transcript = " ".join(segment.text.strip() for segment in segments)
+    # Step 4: Collect segments and compute confidence
+    segments_list = list(segments_gen)
+    transcript, overall_confidence, segment_details = _compute_segment_confidence(segments_list)
 
-    # Cleanup converted file
-    if wav_path != audio_path and os.path.exists(wav_path):
-        os.remove(wav_path)
+    # Step 5: Confidence gating
+    is_low_confidence = overall_confidence < MIN_CONFIDENCE or not transcript.strip()
+    low_confidence_reason = None
+    if is_low_confidence:
+        if not transcript.strip():
+            low_confidence_reason = "empty_transcript"
+        else:
+            low_confidence_reason = "below_threshold"
+        logger.warning(
+            "Low-confidence transcript (%.2f < %.2f): '%s'",
+            overall_confidence, MIN_CONFIDENCE, transcript[:80],
+        )
+
+    # Cleanup temp files
+    _cleanup(wav_path, audio_path)
+    if transcribe_path != wav_path:
+        _cleanup(transcribe_path, None)
 
     return {
         "transcript": transcript.strip(),
-        "detected_language": info.language,         # "en", "hi", etc.
+        "detected_language": info.language,
         "language_confidence": round(info.language_probability, 3),
+        "transcription_confidence": overall_confidence,
+        "is_low_confidence": is_low_confidence,
+        "low_confidence_reason": low_confidence_reason,
+        "segments": segment_details,
+        "vad_info": vad_info,
     }
+
+
+def _cleanup(*paths):
+    """Remove temporary files, ignoring source audio."""
+    for p in paths:
+        if p and os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass

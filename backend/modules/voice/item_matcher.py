@@ -111,7 +111,13 @@ def extract_all_items(text: str, corpus: dict) -> list:
     Sliding window over transcript tokens.
     Tries 3-word, 2-word, then 1-word phrases.
     Uses overlap prevention + minimum confidence per window size.
+
+    Returns: list of matched items.
+    Also sets __last_fuzzy_suggestions on the function for pipeline
+    access when zero items matched (provides recovery suggestions).
     """
+    extract_all_items._last_fuzzy_suggestions = []
+
     if not text or not corpus:
         return []
 
@@ -143,4 +149,13 @@ def extract_all_items(text: str, corpus: dict) -> list:
                     found[item_id] = {**match, "position": i}
                     used_positions.update(window_positions)
 
-    return sorted(found.values(), key=lambda x: x["position"])
+    result = sorted(found.values(), key=lambda x: x["position"])
+
+    # When nothing matched, compute fuzzy suggestions for recovery
+    if not result and tokens:
+        # Try the longest non-skip phrase as the suggestion query
+        meaningful = [t for t in tokens if t.lower() not in SKIP_WORDS and len(t) >= 2]
+        query = " ".join(meaningful) if meaningful else text
+        extract_all_items._last_fuzzy_suggestions = get_alternatives(query, corpus, top_n=3)
+
+    return result

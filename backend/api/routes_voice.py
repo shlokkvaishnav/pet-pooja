@@ -85,12 +85,39 @@ async def transcribe_audio(
     audio_path = await _save_audio_temp(audio)
     try:
         from modules.voice.stt import transcribe
+        from modules.voice import pipeline_errors as errs
+
         result = transcribe(audio_path)
+
+        stage_results = []
+        user_messages = []
+
+        is_low = result.get("is_low_confidence", False)
+        reason = result.get("low_confidence_reason")
+
+        if is_low and reason:
+            sr_map = {
+                "no_speech_detected": errs.stt_no_speech,
+                "empty_transcript": errs.stt_no_speech,
+                "below_threshold": errs.stt_low_confidence,
+            }
+            factory = sr_map.get(reason)
+            if factory:
+                sr = factory()
+                stage_results.append(sr.to_dict())
+                user_messages.append(sr.user_message)
 
         return {
             "transcript": result.get("transcript", ""),
             "detected_language": result.get("detected_language", "en"),
             "confidence": result.get("language_confidence", 0.0),
+            "transcription_confidence": result.get("transcription_confidence", 0.0),
+            "is_low_confidence": is_low,
+            "low_confidence_reason": reason,
+            "segments": result.get("segments", []),
+            "vad_info": result.get("vad_info"),
+            "stage_results": stage_results,
+            "user_messages": user_messages,
         }
     except FileNotFoundError:
         logger.exception("Audio file not found")

@@ -20,6 +20,9 @@ mlxtend
 # Voice -- local STT (runs Whisper on your CPU, no API)
 faster-whisper
 
+# Voice Activity Detection -- filters noise before Whisper (fully local)
+torch
+
 # Fuzzy text matching (Person B - item matching)
 rapidfuzz
 
