@@ -17,7 +17,10 @@ build/
 
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyc
+*.pyo
 *.egg-info/
 *.egg
 
