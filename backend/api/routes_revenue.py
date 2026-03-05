@@ -60,6 +60,19 @@ def _set_cached(key: str, data):
         _cache[key] = {"data": data, "ts": time.time()}
 
 
+def _get_margins_popularity(db: Session) -> tuple[list[dict], list[dict]]:
+    """Return margins and popularity, reusing cached values if available."""
+    margins = _get_cached("_margins")
+    popularity = _get_cached("_popularity")
+    if margins is None:
+        margins = calculate_margins(db)
+        _set_cached("_margins", margins)
+    if popularity is None:
+        popularity = calculate_popularity(db)
+        _set_cached("_popularity", popularity)
+    return margins, popularity
+
+
 @router.get("/dashboard")
 def get_dashboard(db: Session = Depends(get_db)):
     """
@@ -72,8 +85,22 @@ def get_dashboard(db: Session = Depends(get_db)):
         if cached:
             return cached
 
-        analysis = run_full_analysis(db)
-        summary = analysis.get("summary", {})
+        # Only compute what the dashboard needs (skip combos & trends for speed)
+        margins = calculate_margins(db)
+        popularity = calculate_popularity(db)
+        matrix = classify_menu_matrix(margins, popularity)
+        hidden_stars_list = detect_hidden_stars(margins, popularity)
+
+        # Cache these for other endpoints to reuse within TTL
+        _set_cached("_margins", margins)
+        _set_cached("_popularity", popularity)
+
+        total_items = len(margins)
+        avg_margin = (
+            sum(m["margin_pct"] for m in margins) / total_items
+            if total_items > 0
+            else 0
+        )
 
         total_revenue = (
             db.query(func.sum(SaleTransaction.total_price))
@@ -81,31 +108,35 @@ def get_dashboard(db: Session = Depends(get_db)):
         )
 
         items_at_risk = sum(
-            1 for m in analysis.get("matrix", [])
+            1 for m in matrix
             if m.get("quadrant") == "dog" or (
                 m.get("margin_pct", 100) < 40 and m.get("popularity_score", 0) > 50
             )
         )
 
-        hidden_stars = analysis.get("hidden_stars", [])
-        uplift = sum(h.get("estimated_monthly_uplift", 0) for h in hidden_stars)
+        uplift = sum(h.get("estimated_monthly_uplift", 0) for h in hidden_stars_list)
+
+        stars_count = sum(1 for m in matrix if m["quadrant"] == "star")
+        plowhorses_count = sum(1 for m in matrix if m["quadrant"] == "plowhorse")
+        puzzles_count = sum(1 for m in matrix if m["quadrant"] == "puzzle")
+        dogs_count = sum(1 for m in matrix if m["quadrant"] == "dog")
 
         # Operational metrics
         ops = calculate_operational_metrics(db)
 
         result = {
             "total_revenue": round(total_revenue, 2),
-            "avg_cm_percent": summary.get("avg_margin_pct", 0),
+            "avg_cm_percent": round(avg_margin, 1),
             "items_at_risk_count": items_at_risk,
             "uplift_potential": round(uplift, 2),
-            "health_score": summary.get("health_score", 0),
-            "health_score_breakdown": summary.get("health_score_breakdown", {}),
-            "total_items": summary.get("total_items", 0),
-            "stars_count": summary.get("stars", 0),
-            "plowhorses_count": summary.get("plowhorses", 0),
-            "puzzles_count": summary.get("puzzles", 0),
-            "dogs_count": summary.get("dogs", 0),
-            "hidden_stars_count": summary.get("hidden_stars_count", 0),
+            "health_score": 0,
+            "health_score_breakdown": {},
+            "total_items": total_items,
+            "stars_count": stars_count,
+            "plowhorses_count": plowhorses_count,
+            "puzzles_count": puzzles_count,
+            "dogs_count": dogs_count,
+            "hidden_stars_count": len(hidden_stars_list),
             # Operational metrics
             "avg_order_value": ops.get("avg_order_value", 0),
             "total_orders": ops.get("total_orders", 0),
@@ -132,8 +163,7 @@ def get_menu_matrix(db: Session = Depends(get_db)):
         if cached:
             return cached
 
-        margins = calculate_margins(db)
-        popularity = calculate_popularity(db)
+        margins, popularity = _get_margins_popularity(db)
         matrix = classify_menu_matrix(margins, popularity)
         summary = get_quadrant_summary(matrix)
         result = {"items": matrix, "summary": summary}
@@ -152,8 +182,7 @@ def get_hidden_stars(db: Session = Depends(get_db)):
     Returns: hidden star items with estimated_monthly_uplift, recommendation
     """
     try:
-        margins = calculate_margins(db)
-        popularity = calculate_popularity(db)
+        margins, popularity = _get_margins_popularity(db)
         return {"items": detect_hidden_stars(margins, popularity)}
     except Exception as e:
         logger.exception("Error detecting hidden stars")
@@ -168,8 +197,7 @@ def get_risk_items(db: Session = Depends(get_db)):
     Risk = high sales volume + low contribution margin
     """
     try:
-        margins = calculate_margins(db)
-        popularity = calculate_popularity(db)
+        margins, popularity = _get_margins_popularity(db)
         matrix = classify_menu_matrix(margins, popularity)
 
         risk_items = []
@@ -233,8 +261,7 @@ def get_price_recommendations(db: Session = Depends(get_db)):
     Returns: items with current_price, recommended_price, reason
     """
     try:
-        margins = calculate_margins(db)
-        popularity = calculate_popularity(db)
+        margins, popularity = _get_margins_popularity(db)
         return {"recommendations": generate_price_recommendations(margins, popularity)}
     except Exception as e:
         logger.exception("Error generating price recommendations")
@@ -301,13 +328,15 @@ def full_analysis(db: Session = Depends(get_db)):
 @router.get("/margins")
 def get_margins(db: Session = Depends(get_db)):
     """Get contribution margins for all items."""
-    return {"items": calculate_margins(db)}
+    margins, _ = _get_margins_popularity(db)
+    return {"items": margins}
 
 
 @router.get("/popularity")
 def get_popularity(db: Session = Depends(get_db)):
     """Get popularity/velocity scores for all items."""
-    return {"items": calculate_popularity(db)}
+    _, popularity = _get_margins_popularity(db)
+    return {"items": popularity}
 
 
 @router.get("/matrix")
@@ -319,8 +348,7 @@ def get_matrix_legacy(db: Session = Depends(get_db)):
 @router.get("/pricing")
 def get_pricing_legacy(db: Session = Depends(get_db)):
     """Legacy endpoint — redirects to /price-recommendations."""
-    margins = calculate_margins(db)
-    popularity = calculate_popularity(db)
+    margins, popularity = _get_margins_popularity(db)
     return {"recommendations": generate_price_recommendations(margins, popularity)}
 
 

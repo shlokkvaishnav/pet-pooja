@@ -362,6 +362,20 @@ def _fetch_combos_from_db(db: Session) -> list[dict]:
     for (item_id,) in oos_items:
         oos_ids.add(item_id)
 
+    # Pre-fetch all item categories in one query to avoid N+1
+    all_combo_item_ids = set()
+    for c in db_combos:
+        all_combo_item_ids.update(c.item_ids or [])
+    _item_cat_map: dict[int, str] = {}
+    if all_combo_item_ids:
+        rows = (
+            db.query(MenuItem.id, Category.name)
+            .join(Category, MenuItem.category_id == Category.id)
+            .filter(MenuItem.id.in_(all_combo_item_ids))
+            .all()
+        )
+        _item_cat_map = {iid: cname for iid, cname in rows}
+
     result = []
     for i, c in enumerate(db_combos):
         # Skip combos containing out-of-stock items
@@ -375,7 +389,7 @@ def _fetch_combos_from_db(db: Session) -> list[dict]:
         )
 
         # Determine category diversity for combo quality indicator
-        item_categories = _get_item_categories(db, c.item_ids or [])
+        item_categories = [_item_cat_map.get(iid, "Uncategorized") for iid in (c.item_ids or [])]
         category_groups = _classify_category_groups(item_categories)
         combo_structure = "diverse" if len(category_groups) >= 2 else "same-category"
 

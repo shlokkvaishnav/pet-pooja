@@ -5,7 +5,7 @@ Computes contribution margin (Selling Price − Food Cost),
 margin percentage, and profitability tiers for every item.
 """
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
 from models import MenuItem, SaleTransaction
@@ -30,13 +30,14 @@ def calculate_margins(db: Session) -> list[dict]:
         }
     ]
     """
-    # Get items with revenue data
+    # Get items with revenue data — eagerly load category to avoid N+1
     items = (
         db.query(
             MenuItem,
             func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
         )
         .outerjoin(SaleTransaction, MenuItem.id == SaleTransaction.item_id)
+        .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available == True)
         .group_by(MenuItem.id)
         .all()
