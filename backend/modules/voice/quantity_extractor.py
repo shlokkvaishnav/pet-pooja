@@ -25,27 +25,39 @@ HINDI_NUMBERS = {
     # English
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
     "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    # Fractional / special
+    "half": 0.5, "double": 2, "triple": 3,
     # Devanagari (fallback if transliteration missed in normalizer)
     "एक": 1, "दो": 2, "तीन": 3, "चार": 4,
     "पांच": 5, "पाँच": 5, "छह": 6, "छे": 6,
     "सात": 7, "आठ": 8, "नौ": 9, "दस": 10,
 }
 
+# Compound quantity patterns: "2-3", "2 to 3", "2 or 3"
+_RANGE_PATTERN = re.compile(r"(\d+)\s*[-to]+\s*(\d+)")
+
 
 def extract_quantity(text: str, item_position: int, tokens: list) -> int:
     """
-    Looks for quantity in the 2 tokens BEFORE and 2 tokens AFTER
+    Looks for quantity in the 3 tokens BEFORE and 3 tokens AFTER
     the matched item's position in the token list.
     Default: 1.
     """
-    start = max(0, item_position - 2)
-    end = min(len(tokens), item_position + 3)
+    start = max(0, item_position - 3)
+    end = min(len(tokens), item_position + 4)
     window = tokens[start:end]
+
+    # Check for range pattern (e.g., "2-3 naan" -> use higher value)
+    window_text = " ".join(window)
+    range_match = _RANGE_PATTERN.search(window_text)
+    if range_match:
+        return int(range_match.group(2))  # Use the higher bound
 
     for token in window:
         token = token.strip().lower()
         if token in HINDI_NUMBERS:
-            return HINDI_NUMBERS[token]
+            val = HINDI_NUMBERS[token]
+            return int(val) if val >= 1 else 1
         if token.isdigit():
             val = int(token)
             if 1 <= val <= 50:

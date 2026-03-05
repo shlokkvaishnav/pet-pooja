@@ -42,6 +42,10 @@ def build_search_corpus(menu_items: list) -> dict:
     return corpus
 
 
+# Confidence threshold below which we flag for disambiguation
+DISAMBIGUATION_THRESHOLD = 0.85
+
+
 def match_item(text: str, corpus: dict, threshold: int = 70) -> Optional[dict]:
     """Fuzzy match a spoken phrase against the dynamic corpus."""
     if not text or not corpus:
@@ -64,12 +68,42 @@ def match_item(text: str, corpus: dict, threshold: int = 70) -> Optional[dict]:
 
     if result:
         matched_key, score, _ = result
-        return {
+        match_result = {
             "item_id": corpus[matched_key],
             "matched_as": matched_key,
             "confidence": round(score / 100, 3),
         }
+
+        # If confidence is below disambiguation threshold, find alternatives
+        if score / 100 < DISAMBIGUATION_THRESHOLD:
+            alternatives = get_alternatives(text_clean, corpus, top_n=3)
+            match_result["needs_disambiguation"] = True
+            match_result["alternatives"] = alternatives
+        else:
+            match_result["needs_disambiguation"] = False
+            match_result["alternatives"] = []
+
+        return match_result
     return None
+
+
+def get_alternatives(text: str, corpus: dict, top_n: int = 3) -> list:
+    """Return top N fuzzy matches as disambiguation candidates."""
+    results = process.extract(
+        text.strip().lower(),
+        corpus.keys(),
+        scorer=fuzz.token_sort_ratio,
+        limit=top_n,
+        score_cutoff=60,
+    )
+    return [
+        {
+            "item_id": corpus[key],
+            "matched_as": key,
+            "confidence": round(score / 100, 3),
+        }
+        for key, score, _ in results
+    ]
 
 
 def extract_all_items(text: str, corpus: dict) -> list:

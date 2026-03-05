@@ -13,6 +13,7 @@ from .intent_mapper import classify_intent
 from .item_matcher import build_search_corpus, extract_all_items
 from .quantity_extractor import extract_quantities_for_items
 from .modifier_extractor import extract_modifiers
+from .session_store import get_session, update_session, get_session_items
 
 
 # -- Stub functions for D's files (until D delivers them) --
@@ -60,21 +61,24 @@ class VoicePipeline:
         self.combo_rules = combo_rules or []
         self.hidden_stars = hidden_stars or []
 
-    def process_text(self, text: str) -> dict:
+    def process_text(self, text: str, session_id: str = None) -> dict:
         """Process text input (skips STT). For testing without audio."""
         return self._run_pipeline(text, original_transcript=text,
-                                  detected_language="unknown")
+                                  detected_language="unknown",
+                                  session_id=session_id)
 
-    def process_audio(self, audio_path: str) -> dict:
+    def process_audio(self, audio_path: str, session_id: str = None) -> dict:
         """Full pipeline: audio file -> structured order JSON."""
         stt_result = transcribe(audio_path)
         return self._run_pipeline(
             stt_result["transcript"],
             original_transcript=stt_result["transcript"],
             detected_language=stt_result["detected_language"],
+            session_id=session_id,
         )
 
-    def _run_pipeline(self, text, original_transcript, detected_language):
+    def _run_pipeline(self, text, original_transcript, detected_language,
+                      session_id=None):
         # Stage 2: Normalize
         normalized = normalize(text)
 
@@ -117,7 +121,29 @@ class VoicePipeline:
             except Exception:
                 order = _stub_build_order(enriched_items, upsell_suggestions)
 
-        needs_clarification = (intent == "ORDER" and len(enriched_items) == 0)
+        # Stage 8: Session state — accumulate items across turns
+        if session_id:
+            update_session(session_id, enriched_items, intent)
+            session_items = get_session_items(session_id)
+            session_context = get_session(session_id)
+        else:
+            session_items = enriched_items
+            session_context = None
+
+        # Flag clarification needed: no items found OR any item has low confidence
+        disambiguation_items = []
+        for item in enriched_items:
+            if item.get("needs_disambiguation"):
+                disambiguation_items.append({
+                    "item_name": item["item_name"],
+                    "confidence": item["confidence"],
+                    "alternatives": item.get("alternatives", []),
+                })
+
+        needs_clarification = (
+            (intent == "ORDER" and len(enriched_items) == 0)
+            or len(disambiguation_items) > 0
+        )
 
         return {
             "transcript": original_transcript,
@@ -128,6 +154,10 @@ class VoicePipeline:
             "upsell_suggestions": upsell_suggestions,
             "order": order,
             "needs_clarification": needs_clarification,
+            "disambiguation": disambiguation_items,
+            "session_id": session_id,
+            "session_items": session_items if session_id else None,
+            "turn_count": session_context["turn_count"] if session_context else 0,
         }
 
     def _enrich_with_menu_data(self, matched_items):
@@ -137,6 +167,18 @@ class VoicePipeline:
         for match in matched_items:
             menu_item = menu_map.get(match["item_id"])
             if menu_item:
+                # Enrich alternatives with menu data
+                alternatives = []
+                for alt in match.get("alternatives", []):
+                    alt_item = menu_map.get(alt["item_id"])
+                    if alt_item:
+                        alternatives.append({
+                            "item_id": alt["item_id"],
+                            "item_name": alt_item.name,
+                            "confidence": alt["confidence"],
+                            "unit_price": alt_item.selling_price,
+                        })
+
                 enriched.append({
                     "item_id": match["item_id"],
                     "item_name": menu_item.name,
@@ -145,6 +187,8 @@ class VoicePipeline:
                     "line_total": match["quantity"] * menu_item.selling_price,
                     "modifiers": match["modifiers"],
                     "confidence": match["confidence"],
+                    "needs_disambiguation": match.get("needs_disambiguation", False),
+                    "alternatives": alternatives,
                 })
         return enriched
 
@@ -163,8 +207,8 @@ def process_voice_order(db, audio_path: str = None, text_input: str = None,
     pipeline = VoicePipeline(db_session=db, menu_items=menu_items)
 
     if audio_path:
-        return pipeline.process_audio(audio_path)
+        return pipeline.process_audio(audio_path, session_id=session_id)
     elif text_input:
-        return pipeline.process_text(text_input)
+        return pipeline.process_text(text_input, session_id=session_id)
     else:
         return {"error": "No audio_path or text_input provided", "items": []}

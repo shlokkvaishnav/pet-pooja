@@ -92,6 +92,12 @@ async def transcribe_audio(
             "detected_language": result.get("detected_language", "en"),
             "confidence": result.get("language_confidence", 0.0),
         }
+    except FileNotFoundError:
+        logger.exception("Audio file not found")
+        raise HTTPException(status_code=400, detail="Audio file could not be processed")
+    except RuntimeError as e:
+        logger.exception("STT model error")
+        raise HTTPException(status_code=503, detail=f"Speech recognition unavailable: {e}")
     except Exception as e:
         logger.exception("Transcription failed")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
@@ -104,6 +110,7 @@ async def transcribe_audio(
 @router.post("/process-audio")
 async def process_audio(
     audio: UploadFile = File(...),
+    session_id: str = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -113,7 +120,16 @@ async def process_audio(
     pipeline = _get_pipeline(db)
     audio_path = await _save_audio_temp(audio)
     try:
-        return pipeline.process_audio(audio_path)
+        return pipeline.process_audio(audio_path, session_id=session_id)
+    except FileNotFoundError:
+        logger.exception("Audio file not found during processing")
+        raise HTTPException(status_code=400, detail="Audio file could not be read")
+    except RuntimeError as e:
+        logger.exception("STT model error during pipeline")
+        raise HTTPException(status_code=503, detail=f"Speech recognition unavailable: {e}")
+    except ValueError as e:
+        logger.exception("Pipeline parsing error")
+        raise HTTPException(status_code=422, detail=f"Could not parse order: {e}")
     except Exception as e:
         logger.exception("Voice pipeline failed")
         raise HTTPException(status_code=500, detail=f"Voice processing failed: {e}")
@@ -135,7 +151,10 @@ def process_text(
     """
     pipeline = _get_pipeline(db)
     try:
-        return pipeline.process_text(body.text)
+        return pipeline.process_text(body.text, session_id=body.session_id)
+    except ValueError as e:
+        logger.exception("Text parsing error")
+        raise HTTPException(status_code=422, detail=f"Could not parse order: {e}")
     except Exception as e:
         logger.exception("Text processing failed")
         raise HTTPException(status_code=500, detail=f"Text processing failed: {e}")
@@ -223,6 +242,7 @@ def get_recent_orders(
 async def voice_order_legacy(
     audio: UploadFile = File(None),
     text: str = None,
+    session_id: str = None,
     db: Session = Depends(get_db),
 ):
     """Legacy endpoint — process voice or text order."""
@@ -232,9 +252,9 @@ async def voice_order_legacy(
     try:
         if audio and audio.filename:
             audio_path = await _save_audio_temp(audio)
-            return pipeline.process_audio(audio_path)
+            return pipeline.process_audio(audio_path, session_id=session_id)
         elif text:
-            return pipeline.process_text(text)
+            return pipeline.process_text(text, session_id=session_id)
         else:
             raise HTTPException(status_code=400, detail="Provide audio file or text input")
     except HTTPException:

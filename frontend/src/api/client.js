@@ -43,12 +43,15 @@ export const submitVoiceOrder = (audioBlob, sessionId) => {
   if (sessionId) {
     form.append('session_id', sessionId)
   }
-  return api.post('/voice/order', form).then(r => r.data)
+  return api.post('/voice/process-audio', form).then(r => r.data)
 }
 
 export const submitTextOrder = (text, sessionId) =>
-  api.post(`/voice/order/text?text=${encodeURIComponent(text)}&session_id=${sessionId || ''}`)
+  api.post('/voice/process', { text, session_id: sessionId || null })
     .then(r => r.data)
+
+export const confirmOrder = (order, kot) =>
+  api.post('/voice/confirm-order', { order, kot }).then(r => r.data)
 
 // ── Health ──
 
