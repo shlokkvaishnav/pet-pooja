@@ -2,39 +2,36 @@ export default function ComboCard({ combo }) {
   return (
     <div className="card">
       <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>🔗 {combo.name || combo.combo_id}</span>
-        <span className="tag tag-star">Margin {combo.margin_pct}%</span>
+        <span style={{ fontSize: 13 }}>
+          <span style={{ color: 'var(--text-muted)' }}>If orders </span>
+          <strong>{combo.antecedent_name}</strong>
+          <span style={{ color: 'var(--text-muted)' }}> → suggest </span>
+          <strong>{combo.consequent_name}</strong>
+        </span>
+        <span className="tag tag-star">Lift: {parseFloat(combo.lift)?.toFixed(2)}x</span>
       </div>
       <div className="card-body">
-        {/* Items in combo */}
+        {/* Confidence Progress Bar */}
         <div style={{ marginBottom: 12 }}>
-          {combo.items?.map((item, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13 }}>
-              <span>{item.name}</span>
-              <span style={{ color: 'var(--text-muted)' }}>₹{item.price}</span>
-            </div>
-          ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+            <span>Confidence</span>
+            <span>{(combo.confidence * 100)?.toFixed(1)}%</span>
+          </div>
+          <div style={{ width: '100%', height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${combo.confidence * 100}%`, height: '100%', background: 'var(--blue)', borderRadius: 3 }} />
+          </div>
         </div>
 
-        {/* Pricing breakdown */}
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+        {/* Pricing & Gains */}
+        <div style={{ padding: '8px 12px', background: 'var(--surface2)', borderRadius: 6 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-            <span style={{ color: 'var(--text-muted)' }}>Individual total</span>
-            <span style={{ textDecoration: 'line-through', color: 'var(--text-muted)' }}>₹{combo.individual_total}</span>
+            <span style={{ color: 'var(--text-muted)' }}>CM Gain</span>
+            <span style={{ color: 'var(--green)', fontWeight: 600 }}>+₹{parseFloat(combo.cm_gain)?.toFixed(2)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700 }}>
-            <span style={{ color: 'var(--orange)' }}>Combo price</span>
-            <span style={{ color: 'var(--orange)' }}>₹{combo.combo_price}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+            <span style={{ color: 'var(--text-muted)' }}>Suggested Bundle Price</span>
+            <span style={{ fontWeight: 600 }}>₹{parseFloat(combo.suggested_bundle_price)?.toFixed(2)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--green)', marginTop: 4 }}>
-            <span>Save {combo.discount_pct}%</span>
-            <span>Expected margin: ₹{combo.expected_margin}</span>
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)' }}>
-          Co-ordered {combo.co_order_count} times • Support: {(combo.support * 100).toFixed(1)}%
         </div>
       </div>
     </div>

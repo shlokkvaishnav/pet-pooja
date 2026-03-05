@@ -1,15 +1,10 @@
-/**
- * MenuMatrix.jsx — 2×2 BCG Quadrant Scatter Chart
- * Plots items based on popularity (x) vs margin (y)
- */
-
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
 const QUADRANT_COLORS = {
-  star: '#4ade80',
-  plowhorse: '#60a5fa',
-  puzzle: '#ffb347',
-  dog: '#f87171',
+  star: 'var(--green)',
+  'hidden_star': 'var(--purple)',
+  workhorse: 'var(--amber)',
+  dog: 'var(--gray)',
 }
 
 export default function MenuMatrix({ items }) {
@@ -17,46 +12,46 @@ export default function MenuMatrix({ items }) {
 
   const chartData = items.map(item => ({
     x: item.popularity_score,
-    y: item.margin_pct,
+    y: item.cm_percent,
+    z: item.units_sold || 10, // dot size
     name: item.name,
     quadrant: item.quadrant,
-    emoji: item.emoji,
+    action_recommendation: item.action_recommendation || 'Maintain',
   }))
 
   return (
     <div style={{ position: 'relative' }}>
-      {/* Quadrant labels */}
       <div style={{ position: 'absolute', top: 8, left: 60, fontSize: 11, color: 'var(--text-muted)', zIndex: 1 }}>
-        🧩 Puzzles (High Margin, Low Pop)
+        <span style={{ color: 'var(--purple)' }}>🔮 Hidden Stars</span> (High Margin, Low Pop)
       </div>
       <div style={{ position: 'absolute', top: 8, right: 16, fontSize: 11, color: 'var(--text-muted)', zIndex: 1 }}>
-        ⭐ Stars (High Margin, High Pop)
+        <span style={{ color: 'var(--green)' }}>⭐ Stars</span> (High Margin, High Pop)
       </div>
       <div style={{ position: 'absolute', bottom: 30, left: 60, fontSize: 11, color: 'var(--text-muted)', zIndex: 1 }}>
-        🐕 Dogs (Low Margin, Low Pop)
+        <span style={{ color: 'var(--gray)' }}>🐕 Dogs</span> (Low Margin, Low Pop)
       </div>
       <div style={{ position: 'absolute', bottom: 30, right: 16, fontSize: 11, color: 'var(--text-muted)', zIndex: 1 }}>
-        🐴 Plowhorses (Low Margin, High Pop)
+        <span style={{ color: 'var(--amber)' }}>🐴 Workhorses</span> (Low Margin, High Pop)
       </div>
 
-      <ResponsiveContainer width="100%" height={360}>
+      <ResponsiveContainer width="100%" height={400}>
         <ScatterChart margin={{ top: 30, right: 20, bottom: 20, left: 20 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
           <XAxis
             dataKey="x"
             type="number"
             name="Popularity"
-            domain={[0, 1]}
+            domain={[0, 100]} // popularity goes 0-100 as per Person A desc
             tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
             label={{ value: 'Popularity →', position: 'bottom', fill: 'var(--text-muted)', fontSize: 11 }}
           />
           <YAxis
             dataKey="y"
             type="number"
-            name="Margin %"
+            name="CM %"
             domain={[0, 100]}
             tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-            label={{ value: 'Margin % →', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }}
+            label={{ value: 'CM % →', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 11 }}
           />
           <Tooltip
             content={({ payload }) => {
@@ -64,14 +59,16 @@ export default function MenuMatrix({ items }) {
               const item = payload[0].payload
               return (
                 <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
-                  <div style={{ fontWeight: 600 }}>{item.emoji} {item.name}</div>
-                  <div style={{ color: 'var(--text-muted)' }}>Popularity: {(item.x * 100).toFixed(0)}%</div>
-                  <div style={{ color: 'var(--text-muted)' }}>Margin: {item.y.toFixed(1)}%</div>
+                  <div style={{ fontWeight: 600 }}>{item.name}</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Popularity: {item.x?.toFixed(1)}</div>
+                  <div style={{ color: 'var(--text-muted)' }}>CM%: {item.y?.toFixed(1)}%</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Action: <strong style={{ color: QUADRANT_COLORS[item.quadrant] || 'var(--text)' }}>{item.action_recommendation}</strong></div>
+                  <div style={{ color: 'var(--text-muted)', textTransform: 'capitalize' }}>Quadrant: {item.quadrant?.replace('_', ' ')}</div>
                 </div>
               )
             }}
           />
-          <Scatter data={chartData}>
+          <Scatter data={chartData} dataKey="z" shape="circle">
             {chartData.map((entry, idx) => (
               <Cell key={idx} fill={QUADRANT_COLORS[entry.quadrant] || '#888'} opacity={0.8} />
             ))}

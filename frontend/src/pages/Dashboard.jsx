@@ -1,27 +1,39 @@
 import { useState, useEffect } from 'react'
-import { getFullAnalysis } from '../api/client'
+import { getDashboardMetrics, getHiddenStars, getRisks, getCategoryBreakdown } from '../api/client'
 import MetricCard from '../components/MetricCard'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 export default function Dashboard() {
-  const [data, setData] = useState(null)
+  const [metrics, setMetrics] = useState(null)
+  const [hiddenStars, setHiddenStars] = useState([])
+  const [riskItems, setRiskItems] = useState([])
+  const [categoryData, setCategoryData] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getFullAnalysis()
-      .then(setData)
-      .catch(err => console.error('Analysis failed:', err))
+    Promise.all([
+      getDashboardMetrics(),
+      getHiddenStars(),
+      getRisks(),
+      getCategoryBreakdown()
+    ])
+      .then(([metricsData, hiddenStarsData, risksData, categoryBreakdown]) => {
+        setMetrics(metricsData)
+        setHiddenStars(hiddenStarsData.slice(0, 3) || [])
+        setRiskItems(risksData.slice(0, 3) || [])
+        setCategoryData(categoryBreakdown || [])
+      })
+      .catch(err => console.error('Dashboard data load failed:', err))
       .finally(() => setLoading(false))
   }, [])
 
   if (loading) {
-    return <div className="loading"><div className="spinner" /> Loading analysis...</div>
+    return <div className="loading"><div className="spinner" /> Loading dashboard...</div>
   }
 
-  if (!data) {
+  if (!metrics) {
     return <div className="loading">Failed to load data. Is the backend running?</div>
   }
-
-  const { summary, matrix, hidden_stars, combos } = data
 
   return (
     <div>
@@ -33,86 +45,71 @@ export default function Dashboard() {
       {/* KPI Cards */}
       <div className="grid-4" style={{ marginBottom: 24 }}>
         <MetricCard
-          label="Menu Health Score"
-          value={summary.health_score}
-          suffix="/100"
-          color="var(--orange)"
-          icon="📊"
-        />
-        <MetricCard
-          label="Avg. Margin"
-          value={`${summary.avg_margin_pct}%`}
-          color="var(--green)"
+          label="Total Revenue"
+          value={`₹${metrics.total_revenue?.toLocaleString() || 0}`}
+          color="var(--blue)"
           icon="💰"
         />
         <MetricCard
-          label="Star Items"
-          value={summary.stars}
+          label="Avg CM%"
+          value={`${metrics.avg_cm_pct || 0}%`}
           color="var(--green)"
-          icon="⭐"
-        />
-        <MetricCard
-          label="Hidden Stars"
-          value={summary.hidden_stars_count}
-          color="var(--amber)"
-          icon="🔍"
-        />
-      </div>
-
-      <div className="grid-4" style={{ marginBottom: 24 }}>
-        <MetricCard
-          label="Total Items"
-          value={summary.total_items}
-          color="var(--blue)"
-          icon="🍽️"
-        />
-        <MetricCard
-          label="Dog Items"
-          value={summary.dogs}
-          color="var(--red)"
-          icon="🐕"
-        />
-        <MetricCard
-          label="Combos Suggested"
-          value={summary.combos_suggested}
-          color="var(--purple)"
-          icon="🔗"
-        />
-        <MetricCard
-          label="Price Actions"
-          value={summary.price_actions}
-          color="var(--cyan)"
           icon="📈"
         />
+        <MetricCard
+          label="Items At Risk"
+          value={metrics.items_at_risk || 0}
+          color="var(--red)"
+          icon="⚠️"
+        />
+        <MetricCard
+          label="Uplift Potential"
+          value={`₹${metrics.uplift_potential?.toLocaleString() || 0}`}
+          color="var(--amber)"
+          icon="🚀"
+        />
       </div>
 
-      {/* Quick glance: quadrant distribution */}
-      <div className="grid-2">
+      <div className="grid-2" style={{ marginBottom: 24 }}>
+        {/* CM% Per Category Chart */}
         <div className="card">
-          <div className="card-header">⭐ Top Stars</div>
+          <div className="card-header">📊 Average CM% per Category</div>
           <div className="card-body">
-            {matrix && matrix
-              .filter(i => i.quadrant === 'star')
-              .slice(0, 5)
-              .map(item => (
-                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: 13 }}>{item.name}</span>
-                  <span style={{ fontSize: 12, color: 'var(--green)' }}>{item.margin_pct}% margin</span>
-                </div>
-              ))
-            }
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={categoryData} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
+                <XAxis dataKey="category" tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
+                <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
+                <Tooltip cursor={{ fill: 'var(--surface2)' }} contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
+                <Bar dataKey="avg_cm_pct" fill="var(--blue)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="card">
-          <div className="card-header">🔍 Hidden Stars (Boost These!)</div>
-          <div className="card-body">
-            {hidden_stars && hidden_stars.slice(0, 5).map(item => (
-              <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: 13 }}>{item.name}</span>
-                <span style={{ fontSize: 12, color: 'var(--amber)' }}>Opportunity: {item.opportunity_score}</span>
-              </div>
-            ))}
+        {/* Quick View Lists */}
+        <div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-header" style={{ color: 'var(--purple)' }}>🔍 Top 3 Hidden Stars</div>
+            <div className="card-body">
+              {hiddenStars.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No hidden stars found.</div> : hiddenStars.map(item => (
+                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: 13 }}>{item.name}</span>
+                  <span style={{ fontSize: 12, color: 'var(--purple)', fontWeight: 600 }}>CM: {item.cm_percent}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header" style={{ color: 'var(--red)' }}>⚠️ Top 3 Risk Items</div>
+            <div className="card-body">
+              {riskItems.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No items at risk.</div> : riskItems.map(item => (
+                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: 13 }}>{item.name}</span>
+                  <span style={{ fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>CM: {item.cm_percent}%</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>

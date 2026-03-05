@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { submitTextOrder, submitVoiceOrder } from '../api/client'
+import { processVoiceText, processVoiceAudio, confirmOrder } from '../api/client'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
 import KOTTicket from '../components/KOTTicket'
@@ -8,28 +8,54 @@ export default function VoiceOrder() {
   const [result, setResult] = useState(null)
   const [textInput, setTextInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const [kotData, setKotData] = useState(null)
 
   const handleTextOrder = async () => {
     if (!textInput.trim()) return
     setLoading(true)
+    setConfirmed(false)
+    setKotData(null)
     try {
-      const data = await submitTextOrder(textInput)
+      const data = await processVoiceText(textInput)
       setResult(data)
     } catch (err) {
-      console.error('Order failed:', err)
+      console.error('Text order failed:', err)
     }
     setLoading(false)
   }
 
   const handleAudioRecorded = async (audioBlob) => {
     setLoading(true)
+    setConfirmed(false)
+    setKotData(null)
     try {
-      const data = await submitVoiceOrder(audioBlob)
+      const data = await processVoiceAudio(audioBlob)
       setResult(data)
     } catch (err) {
       console.error('Voice order failed:', err)
     }
     setLoading(false)
+  }
+
+  const handleConfirm = async () => {
+    if (!result?.order) return
+    setLoading(true)
+    try {
+      const data = await confirmOrder(result.order)
+      setConfirmed(true)
+      setKotData(data.kot)
+    } catch (err) {
+      console.error('Confirm order failed:', err)
+    }
+    setLoading(false)
+  }
+
+  const handleDiscard = () => {
+    setResult(null)
+    setTextInput('')
+    setConfirmed(false)
+    setKotData(null)
   }
 
   return (
@@ -48,6 +74,14 @@ export default function VoiceOrder() {
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 12 }}>
               Click to record, click again to stop
             </p>
+            {result?.transcript && (
+              <div style={{ marginTop: 16 }}>
+                <span className="tag tag-blue" style={{ marginBottom: 8, display: 'inline-block' }}>Language Info</span>
+                <p style={{ fontSize: 13, background: 'var(--surface2)', padding: '8px 12px', borderRadius: 4 }}>
+                  {result.transcript}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -85,67 +119,50 @@ export default function VoiceOrder() {
       </div>
 
       {/* Results */}
-      {result && (
+      {result && !confirmed && (
         <>
-          {/* Parsed info */}
-          {result.raw_text && (
-            <div className="card" style={{ marginBottom: 16 }}>
-              <div className="card-header">📝 Parsed Input</div>
-              <div className="card-body">
-                <div style={{ marginBottom: 8 }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Raw text: </span>
-                  <span style={{ fontSize: 13 }}>{result.raw_text}</span>
-                </div>
-                <div style={{ marginBottom: 8 }}>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Normalized: </span>
-                  <span style={{ fontSize: 13 }}>{result.normalized_text}</span>
-                </div>
-                <div>
-                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Intent: </span>
-                  <span className={`tag tag-${result.intent === 'order' ? 'star' : 'puzzle'}`}>
-                    {result.intent}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Errors */}
-          {result.errors?.length > 0 && (
-            <div className="card" style={{ marginBottom: 16, borderColor: 'var(--red)' }}>
-              <div className="card-body">
-                {result.errors.map((err, i) => (
-                  <p key={i} style={{ color: 'var(--red)', fontSize: 13 }}>⚠️ {err}</p>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="grid-2">
             {/* Order Summary */}
-            {result.order && <OrderSummary order={result.order} />}
-
-            {/* KOT Ticket */}
-            {result.kot && <KOTTicket kot={result.kot} />}
-          </div>
-
-          {/* Upsell suggestions */}
-          {result.upsells?.length > 0 && (
-            <div className="card" style={{ marginTop: 16 }}>
-              <div className="card-header">⬆️ Upsell Suggestions</div>
-              <div className="card-body">
-                {result.upsells.map(u => (
-                  <div key={u.item_id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                    <span style={{ fontSize: 13 }}>{u.suggestion_text}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>
-                      (margin: {u.margin_pct}%)
-                    </span>
-                  </div>
-                ))}
+            {result.order && (
+              <div>
+                <OrderSummary order={result.order} />
+                <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+                  <button className="btn btn-primary" style={{ flex: 1, backgroundColor: 'var(--green)', borderColor: 'var(--green)' }} onClick={handleConfirm} disabled={loading}>
+                    Confirm Order
+                  </button>
+                  <button className="btn btn-secondary" style={{ flex: 1 }} onClick={handleDiscard} disabled={loading}>
+                    Discard
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+
+            {/* Upsell suggestions Banner */}
+            {result.upsell_suggestions?.length > 0 && (
+              <div className="card" style={{ marginTop: 16, borderColor: 'var(--orange)', borderWidth: 2 }}>
+                <div className="card-header" style={{ color: 'var(--orange)', backgroundColor: 'rgba(255, 107, 53, 0.1)', fontWeight: 'bold' }}>⬆️ Upsell Suggestions</div>
+                <div className="card-body">
+                  {result.upsell_suggestions.map((u, i) => (
+                    <div key={i} style={{ padding: '8px 0', borderBottom: i < result.upsell_suggestions.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                      <span style={{ fontSize: 14, fontWeight: 'bold', color: 'var(--orange)' }}>{u.suggestion_text}</span>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{u.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </>
+      )}
+
+      {/* Confirmed KOT display */}
+      {confirmed && kotData && (
+        <div style={{ maxWidth: 400, margin: '0 auto' }}>
+          <KOTTicket kot={kotData} />
+          <button className="btn btn-primary" style={{ width: '100%', marginTop: 16 }} onClick={handleDiscard}>
+            New Order
+          </button>
+        </div>
       )}
     </div>
   )

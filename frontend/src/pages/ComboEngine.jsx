@@ -1,43 +1,95 @@
 import { useState, useEffect } from 'react'
-import { getCombos } from '../api/client'
+import { getCombos, getPriceRecommendations } from '../api/client'
 import ComboCard from '../components/ComboCard'
 
 export default function ComboEngine() {
   const [combos, setCombos] = useState([])
+  const [prices, setPrices] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getCombos()
-      .then(data => setCombos(data.combos || []))
-      .catch(err => console.error('Combos failed:', err))
+    Promise.all([
+      getCombos().catch(() => ({ combos: [] })),
+      getPriceRecommendations().catch(() => [])
+    ])
+      .then(([comboData, priceData]) => {
+        setCombos(comboData.combos || comboData || [])
+        setPrices(priceData || [])
+      })
+      .catch(err => console.error('Combos/Pricing failed:', err))
       .finally(() => setLoading(false))
   }, [])
 
   if (loading) {
-    return <div className="loading"><div className="spinner" /> Mining combos from sales data...</div>
+    return <div className="loading"><div className="spinner" /> Mining combos and crunching prices...</div>
   }
 
   return (
     <div>
       <div className="page-header">
-        <h1>Combo Engine</h1>
-        <p>AI-generated combo recommendations from frequently co-ordered items</p>
+        <h1>Combo Engine & Price Optimizer</h1>
+        <p>AI-generated combo recommendations & quadrant-based price strategies</p>
       </div>
 
+      <h2 style={{ fontSize: 18, marginBottom: 16 }}>🔗 Suggested Combos</h2>
       {combos.length === 0 ? (
-        <div className="card">
+        <div className="card" style={{ marginBottom: 32 }}>
           <div className="card-body" style={{ textAlign: 'center', padding: 40 }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🔗</div>
-            <p style={{ color: 'var(--text-muted)' }}>No combos generated yet. Make sure the database is seeded.</p>
+            <p style={{ color: 'var(--text-muted)' }}>No combos generated yet.</p>
           </div>
         </div>
       ) : (
-        <div className="grid-2">
+        <div className="grid-2" style={{ marginBottom: 32 }}>
           {combos.map((combo, idx) => (
-            <ComboCard key={combo.combo_id || idx} combo={combo} />
+            <ComboCard key={idx} combo={combo} />
           ))}
         </div>
       )}
+
+      <h2 style={{ fontSize: 18, marginBottom: 16 }}>📈 Price Recommendations</h2>
+      <div className="card">
+        <div className="card-body" style={{ padding: 0 }}>
+          {prices.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+              No price recommendations at this time.
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Current Price</th>
+                  <th>Suggested Price</th>
+                  <th>Quadrant Strategy</th>
+                  <th>Reasoning</th>
+                </tr>
+              </thead>
+              <tbody>
+                {prices.map((p, idx) => (
+                  <tr key={idx}>
+                    <td style={{ fontWeight: 600 }}>{p.name}</td>
+                    <td>₹{p.current_price}</td>
+                    <td style={{ fontWeight: 600, color: p.suggested_price > p.current_price ? 'var(--green)' : 'var(--text)' }}>
+                      ₹{p.suggested_price}
+                      {p.suggested_price > p.current_price && <span style={{ fontSize: 11, marginLeft: 4 }}>↑</span>}
+                    </td>
+                    <td>
+                      <span className={`tag tag-${p.priority === 'high' ? 'red' :
+                          p.priority === 'medium' ? 'amber' :
+                            'blue'
+                        }`}>
+                        {p.quadrant?.replace('_', ' ')}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{p.reasoning}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
