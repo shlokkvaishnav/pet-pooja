@@ -2,6 +2,11 @@ import { useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef } from 'react'
 import BlurText from '../components/BlurText'
 import TypewriterText from '../components/TypewriterText'
+import {
+    motion, ScrollReveal, StaggerReveal, AnimatedNumber,
+    fadeInUp, fadeInLeft, fadeInRight, staggerContainer, staggerItem,
+    staggerContainerSlow, scaleIn, popIn, slideInFromLeft, slideInFromRight
+} from '../utils/animations'
 
 const heroImages = [
     '/images/hero1.png',
@@ -101,19 +106,37 @@ export default function Landing() {
                         />
                     </div>
 
-                    <div className="lp-hero-line" />
+                    <motion.div
+                        className="lp-hero-line"
+                        initial={{ width: 0 }}
+                        animate={titleLoaded ? { width: 80 } : {}}
+                        transition={{ duration: 0.8, delay: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
+                    />
 
-                    <p className="lp-hero-desc">
+                    <motion.p
+                        className="lp-hero-desc"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={titleLoaded ? { opacity: 1, y: 0 } : {}}
+                        transition={{ duration: 0.6, delay: 0.5 }}
+                    >
                         Sizzle is the all-in-one AI-powered platform for modern restaurants.
                         From real-time revenue intelligence to voice-powered ordering in
                         English, Hindi and Hinglish — take control of your kitchen, your
                         menu, and your margins.
-                    </p>
+                    </motion.p>
 
-                    <button className="lp-cta lp-cta-pill" onClick={() => navigate('/login')}>
+                    <motion.button
+                        className="lp-cta lp-cta-pill"
+                        onClick={() => navigate('/login')}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={titleLoaded ? { opacity: 1, y: 0 } : {}}
+                        transition={{ duration: 0.6, delay: 0.7 }}
+                        whileHover={{ scale: 1.04, y: -2 }}
+                        whileTap={{ scale: 0.97 }}
+                    >
                         EXPLORE THE PLATFORM
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
-                    </button>
+                    </motion.button>
                 </div>
 
                 {/* Right: image with blur/fade overlay */}
@@ -184,95 +207,121 @@ export default function Landing() {
 
             {/* Features Strip */}
             <section className="lp-features" id="features">
-                <div className="lp-features-inner">
+                <StaggerReveal className="lp-features-inner" variants={staggerContainerSlow}>
                     {[
                         { num: '01', title: 'Revenue Intelligence', desc: 'Real-time margin analysis and menu health scoring across your entire catalogue.' },
                         { num: '02', title: 'Voice Ordering', desc: 'AI-powered speech recognition. Take orders in English, Hindi, or Hinglish — hands free.' },
                         { num: '03', title: 'Menu Matrix', desc: 'Classify every dish as Star, Hidden Star, Workhorse or Dog. Act on data, not gut.' },
                         { num: '04', title: 'Smart Combos', desc: 'Auto-generated combo bundles from real order patterns. Boost ticket size effortlessly.' },
                     ].map((f, i) => (
-                        <div key={i} className="lp-feature-item">
-                            <span className="lp-feature-num">{f.num}</span>
+                        <motion.div key={i} className="lp-feature-item" variants={staggerItem}
+                            whileHover={{ backgroundColor: 'rgba(22, 22, 22, 1)', transition: { duration: 0.3 } }}
+                        >
+                            <motion.span
+                                className="lp-feature-num"
+                                initial={{ opacity: 0, x: -10 }}
+                                whileInView={{ opacity: 1, x: 0 }}
+                                viewport={{ once: true }}
+                                transition={{ delay: 0.1 * i, duration: 0.4 }}
+                            >
+                                {f.num}
+                            </motion.span>
                             <h3>{f.title}</h3>
                             <p>{f.desc}</p>
-                        </div>
+                        </motion.div>
                     ))}
-                </div>
+                </StaggerReveal>
             </section>
 
             {/* About */}
             <section className="lp-about" id="about">
                 <div className="lp-about-inner">
-                    <div className="lp-about-image">
+                    <ScrollReveal className="lp-about-image" variants={slideInFromLeft}>
                         <img src="/images/hero2.png" alt="About Sizzle" />
-                    </div>
-                    <div className="lp-about-content">
-                        <span className="lp-section-tag">ABOUT SIZZLE</span>
+                    </ScrollReveal>
+                    <ScrollReveal className="lp-about-content" variants={slideInFromRight}>
+                        <motion.span className="lp-section-tag"
+                            initial={{ opacity: 0, y: 10 }}
+                            whileInView={{ opacity: 1, y: 0 }}
+                            viewport={{ once: true }}
+                            transition={{ duration: 0.4 }}
+                        >
+                            ABOUT SIZZLE
+                        </motion.span>
                         <h2>Built for restaurants.<br /><span className="lp-accent">Powered by AI.</span></h2>
                         <p>
                             We built Sizzle because restaurant owners deserve better tools. Not another POS system — a true
                             revenue intelligence copilot. From hidden star discovery to automated KOT generation, every feature
                             is designed to increase margins and reduce friction in the kitchen.
                         </p>
-                        <div className="lp-stats-row">
-                            <div className="lp-stat">
-                                <span className="lp-stat-value">2,400+</span>
+                        <StaggerReveal className="lp-stats-row" variants={staggerContainer}>
+                            <motion.div className="lp-stat" variants={staggerItem}>
+                                <span className="lp-stat-value"><AnimatedNumber value={2400} prefix="" suffix="+" /></span>
                                 <span className="lp-stat-label">Restaurants</span>
-                            </div>
-                            <div className="lp-stat">
-                                <span className="lp-stat-value">18%</span>
+                            </motion.div>
+                            <motion.div className="lp-stat" variants={staggerItem}>
+                                <span className="lp-stat-value"><AnimatedNumber value={18} suffix="%" /></span>
                                 <span className="lp-stat-label">Avg Revenue Uplift</span>
-                            </div>
-                            <div className="lp-stat">
-                                <span className="lp-stat-value">3</span>
+                            </motion.div>
+                            <motion.div className="lp-stat" variants={staggerItem}>
+                                <span className="lp-stat-value"><AnimatedNumber value={3} /></span>
                                 <span className="lp-stat-label">Languages Supported</span>
-                            </div>
-                        </div>
-                    </div>
+                            </motion.div>
+                        </StaggerReveal>
+                    </ScrollReveal>
                 </div>
             </section>
 
             {/* CTA */}
             <section className="lp-cta-section">
-                <h2>Ready to transform your restaurant?</h2>
-                <p>Join thousands of restaurant owners already using Sizzle.</p>
-                <button className="lp-cta" onClick={() => navigate('/login')}>
-                    GET STARTED FREE
-                </button>
+                <ScrollReveal variants={scaleIn}>
+                    <h2>Ready to transform your restaurant?</h2>
+                    <p>Join thousands of restaurant owners already using Sizzle.</p>
+                    <motion.button
+                        className="lp-cta"
+                        onClick={() => navigate('/login')}
+                        whileHover={{ scale: 1.05, y: -3 }}
+                        whileTap={{ scale: 0.97 }}
+                    >
+                        GET STARTED FREE
+                    </motion.button>
+                </ScrollReveal>
             </section>
 
             {/* Footer */}
-            <footer className="lp-footer">
-                <div className="lp-footer-inner">
-                    <div className="lp-footer-brand">
-                        <span className="lp-footer-logo">SIZZLE</span>
-                        <p>AI-powered restaurant management for the modern kitchen.</p>
+            <ScrollReveal>
+                <footer className="lp-footer">
+                    <StaggerReveal className="lp-footer-inner" variants={staggerContainer}>
+                        <motion.div className="lp-footer-brand" variants={staggerItem}>
+                            <span className="lp-footer-logo">SIZZLE</span>
+                            <p>AI-powered restaurant management for the modern kitchen.</p>
+                        </motion.div>
+                        <motion.div className="lp-footer-links" variants={staggerItem}>
+                            <div>
+                                <h4>Product</h4>
+                                <a href="#features">Features</a>
+                                <a href="#">Pricing</a>
+                                <a href="#">API Docs</a>
+                            </div>
+                            <div>
+                                <h4>Company</h4>
+                                <a href="#about">About</a>
+                                <a href="#">Careers</a>
+                                <a href="#">Blog</a>
+                            </div>
+                            <div>
+                                <h4>Support</h4>
+                                <a href="#">Help Center</a>
+                                <a href="#">Contact</a>
+                                <a href="#">Status</a>
+                            </div>
+                        </motion.div>
+                    </StaggerReveal>
+                    <div className="lp-footer-bottom">
+                        &copy; 2026 Sizzle Technologies Pvt. Ltd. All rights reserved.
                     </div>
-                    <div className="lp-footer-links">
-                        <div>
-                            <h4>Product</h4>
-                            <a href="#features">Features</a>
-                            <a href="#">Pricing</a>
-                            <a href="#">API Docs</a>
-                        </div>
-                        <div>
-                            <h4>Company</h4>
-                            <a href="#about">About</a>
-                            <a href="#">Careers</a>
-                            <a href="#">Blog</a>
-                        </div>
-                        <div>
-                            <h4>Support</h4>
-                            <a href="#">Help Center</a>
-                            <a href="#">Contact</a>
-                            <a href="#">Status</a>
-                        </div>
-                    </div>
-                </div>
-                <div className="lp-footer-bottom">
-                    &copy; 2026 Sizzle Technologies Pvt. Ltd. All rights reserved.
-                </div>
-            </footer>
+                </footer>
+            </ScrollReveal>
         </div>
     )
 }

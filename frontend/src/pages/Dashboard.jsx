@@ -2,6 +2,10 @@ import { useState, useEffect } from 'react'
 import { getDashboardMetrics, getHiddenStars, getRisks, getCategoryBreakdown, getTrends } from '../api/client'
 import MetricCard from '../components/MetricCard'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts'
+import { motion, AnimatePresence } from 'motion/react'
+import { StaggerReveal, ScrollReveal, staggerContainer, staggerItem, fadeInUp } from '../utils/animations'
+import { formatRupees, formatRupeesShort, formatPct } from '../utils/format'
+import { TrendUp, TrendDown, Warning, Star, EyeSlash, ArrowRight } from '@phosphor-icons/react'
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState(null)
@@ -22,8 +26,8 @@ export default function Dashboard() {
     ])
       .then(([metricsData, hiddenStarsData, risksData, categoryBreakdown, trendsData]) => {
         setMetrics(metricsData)
-        setHiddenStars(hiddenStarsData.slice(0, 3) || [])
-        setRiskItems(risksData.slice(0, 3) || [])
+        setHiddenStars(hiddenStarsData.slice(0, 5) || [])
+        setRiskItems(risksData.slice(0, 5) || [])
         setCategoryData(categoryBreakdown || [])
         setTrends(trendsData)
       })
@@ -32,7 +36,19 @@ export default function Dashboard() {
   }, [])
 
   if (loading) {
-    return <div className="loading"><div className="spinner" /> Loading dashboard...</div>
+    return (
+      <div style={{ padding: 'var(--space-12)' }}>
+        <div className="grid-3" style={{ marginBottom: 'var(--space-6)' }}>
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 130, animationDelay: `${i * 100}ms` }} />
+          ))}
+        </div>
+        <div className="grid-2">
+          <div className="skeleton" style={{ height: 300 }} />
+          <div className="skeleton" style={{ height: 300 }} />
+        </div>
+      </div>
+    )
   }
 
   if (!metrics) {
@@ -43,192 +59,310 @@ export default function Dashboard() {
   const driftItems = trends?.quadrant_drift || []
   const peakHours = metrics.peak_hours || []
 
+  // Build alert chips
+  const alerts = []
+  if (riskItems.length > 0) {
+    alerts.push({ type: 'danger', text: `${riskItems.length} underperformers dragging avg margin` })
+  }
+  if (driftItems.length > 0) {
+    alerts.push({ type: 'warning', text: `${driftItems.length} items drifting quadrants` })
+  }
+  if (hiddenStars.length > 0) {
+    alerts.push({ type: 'info', text: `${hiddenStars.length} hidden gems ready to promote` })
+  }
+
+  const chartTooltipStyle = {
+    backgroundColor: 'var(--bg-surface)',
+    borderColor: 'var(--border-subtle)',
+    color: 'var(--text-primary)',
+    borderRadius: 8,
+    fontSize: 12,
+    fontFamily: 'var(--font-body)',
+  }
+
   return (
-    <div>
-      <div className="page-header">
-        <h1>Dashboard</h1>
-        <p>Revenue intelligence overview — all metrics at a glance</p>
-      </div>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35 }}
+    >
+      {/* Page Header */}
+      <motion.div
+        className="page-header"
+        initial={{ opacity: 0, x: -20 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.5 }}
+      >
+        <h1>Revenue Overview</h1>
+        <p>Last updated — {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</p>
+      </motion.div>
 
-      {/* KPI Cards — Row 1: Strategic */}
-      <div className="grid-4" style={{ marginBottom: 16 }}>
-        <MetricCard
-          label="Total Revenue"
-          value={`₹${metrics.total_revenue?.toLocaleString() || 0}`}
-          color="var(--blue)"
-          icon="💰"
-        />
-        <MetricCard
-          label="Avg CM%"
-          value={`${metrics.avg_cm_percent || 0}%`}
-          color="var(--green)"
-          icon="📈"
-        />
-        <MetricCard
-          label="Items At Risk"
-          value={metrics.items_at_risk_count || 0}
-          color="var(--red)"
-          icon="⚠️"
-        />
-        <MetricCard
-          label="Uplift Potential"
-          value={`₹${metrics.uplift_potential?.toLocaleString() || 0}`}
-          color="var(--amber)"
-          icon="🚀"
-        />
-      </div>
-
-      {/* KPI Cards — Row 2: Operational */}
-      <div className="grid-4" style={{ marginBottom: 24 }}>
-        <MetricCard
-          label="Avg Order Value"
-          value={`₹${metrics.avg_order_value?.toLocaleString() || 0}`}
-          color="var(--purple)"
-          icon="🧾"
-        />
-        <MetricCard
-          label="Total Orders (30d)"
-          value={metrics.total_orders || 0}
-          color="var(--blue)"
-          icon="📋"
-        />
-        <div
-          className="card"
-          style={{ cursor: 'pointer', position: 'relative' }}
-          onClick={() => setShowHealthBreakdown(!showHealthBreakdown)}
-        >
-          <div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 16 }}>
-            <div>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 1 }}>
-                Health Score <span style={{ fontSize: 10, opacity: 0.7 }}>ⓘ click</span>
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: metrics.health_score >= 60 ? 'var(--green)' : metrics.health_score >= 40 ? 'var(--amber)' : 'var(--red)' }}>
-                {metrics.health_score || 0}
-              </div>
-            </div>
-            <div style={{ fontSize: 28 }}>🏥</div>
+      {/* Zone 1: Hero Strip */}
+      <motion.div
+        style={{
+          background: 'linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-base) 100%)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-lg)',
+          padding: 'var(--space-8)',
+          marginBottom: 'var(--space-6)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 'var(--space-6)',
+        }}
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1, duration: 0.5 }}
+      >
+        <div>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 900, color: 'var(--text-primary)', marginBottom: 4 }}>
+            Sizzle Restaurant
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            {new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </div>
         </div>
-        <MetricCard
-          label="Peak Hour"
-          value={peakHours[0]?.label || '—'}
-          suffix={peakHours[0] ? `(${peakHours[0].order_count} orders)` : ''}
-          color="var(--amber)"
-          icon="⏰"
-        />
-      </div>
+        <div style={{ display: 'flex', gap: 'var(--space-10)', flexWrap: 'wrap' }}>
+          {[
+            { label: 'Total Revenue', value: formatRupeesShort(metrics.total_revenue) },
+            { label: 'Orders (30d)', value: metrics.total_orders || 0 },
+            { label: 'Menu Health', value: metrics.health_score || 0 },
+          ].map((item) => (
+            <div key={item.label} style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-secondary)', marginBottom: 4 }}>
+                {item.label}
+              </div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 28, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+
+      {/* Zone 2: Alert Rail */}
+      {alerts.length > 0 && (
+        <div style={{ display: 'flex', gap: 'var(--space-3)', marginBottom: 'var(--space-6)', overflowX: 'auto', paddingBottom: 4 }}>
+          {alerts.map((alert, i) => (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.3 + i * 0.08, duration: 0.3 }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-2)',
+                padding: 'var(--space-2) var(--space-4)',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-full)',
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                background: alert.type === 'danger' ? 'var(--danger)' : alert.type === 'warning' ? 'var(--warning)' : 'var(--info)',
+              }} />
+              {alert.text}
+              <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />
+            </motion.div>
+          ))}
+        </div>
+      )}
+
+      {/* Zone 3: KPI Cards — 3x2 grid */}
+      <StaggerReveal className="grid-3" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
+        <motion.div variants={staggerItem}>
+          <MetricCard
+            label="Menu Health"
+            value={metrics.health_score || 0}
+            color={metrics.health_score >= 60 ? 'var(--success)' : metrics.health_score >= 40 ? 'var(--warning)' : 'var(--danger)'}
+            icon="🏥"
+          />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard
+            label="Avg Contribution Margin"
+            value={formatPct(metrics.avg_cm_percent)}
+            color="var(--success)"
+            icon="📈"
+          />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard
+            label="Star Items"
+            value={metrics.star_count || hiddenStars.length || 0}
+            color="var(--success)"
+            icon="⭐"
+          />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard
+            label="Hidden Gems"
+            value={hiddenStars.length || 0}
+            color="var(--data-5)"
+            icon="💎"
+          />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard
+            label="Underperformers"
+            value={metrics.items_at_risk_count || 0}
+            color="var(--danger)"
+            icon="⚠️"
+          />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard
+            label="Price Opportunities"
+            value={formatRupeesShort(metrics.uplift_potential)}
+            color="var(--warning)"
+            icon="💡"
+          />
+        </motion.div>
+      </StaggerReveal>
 
       {/* Health Score Breakdown (collapsible) */}
-      {showHealthBreakdown && healthBreakdown.components && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-header">🏥 Health Score Breakdown</div>
+      <div style={{ marginBottom: 'var(--space-6)' }}>
+        <button
+          className="btn btn-ghost"
+          onClick={() => setShowHealthBreakdown(!showHealthBreakdown)}
+          style={{ fontSize: 12, marginBottom: 'var(--space-3)' }}
+        >
+          {showHealthBreakdown ? '▾' : '▸'} Health Score Breakdown
+        </button>
+        <AnimatePresence>
+          {showHealthBreakdown && healthBreakdown.components && (
+            <motion.div
+              className="card"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
+            >
+              <div className="card-body">
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 'var(--space-4)' }}>
+                  {healthBreakdown.explanation}
+                </p>
+                <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
+                  {healthBreakdown.components.map((c, i) => (
+                    <div key={i} style={{
+                      flex: '1 1 200px',
+                      padding: 'var(--space-4)',
+                      background: 'var(--bg-elevated)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-subtle)',
+                    }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{c.name}</div>
+                      <div style={{
+                        fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 600,
+                        color: c.score >= 0 ? 'var(--success)' : 'var(--danger)',
+                      }}>
+                        {c.score > 0 ? '+' : ''}{c.score} <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>/ {c.max}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{c.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Zone 4: Intelligence Split — 60/40 */}
+      <StaggerReveal style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 'var(--space-6)', marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
+        {/* CM% Per Category Chart */}
+        <motion.div className="card" variants={staggerItem}>
+          <div className="card-header">Average CM% per Category</div>
           <div className="card-body">
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
-              {healthBreakdown.explanation}
-            </p>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              {healthBreakdown.components.map((c, i) => (
-                <div key={i} style={{
-                  flex: '1 1 200px',
-                  padding: 12,
-                  background: 'var(--surface2)',
-                  borderRadius: 8,
-                  border: '1px solid var(--border)',
-                }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>{c.name}</div>
-                  <div style={{
-                    fontSize: 20, fontWeight: 700,
-                    color: c.score >= 0 ? 'var(--green)' : 'var(--red)',
-                  }}>
-                    {c.score > 0 ? '+' : ''}{c.score} <span style={{ fontSize: 11, fontWeight: 400 }}>/ {c.max}</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{c.detail}</div>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={categoryData} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
+                <XAxis dataKey="category" tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'Sora' }} />
+                <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+                <Tooltip cursor={{ fill: 'rgba(30,30,40,0.5)' }} contentStyle={chartTooltipStyle} />
+                <Bar dataKey="avg_cm_pct" fill="var(--accent)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </motion.div>
+
+        {/* Right column: Hidden Gems + Underperformers */}
+        <motion.div variants={staggerItem} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+          <div className="card" style={{ flex: 1 }}>
+            <div className="card-header" style={{ color: 'var(--data-5)' }}>
+              Hidden Gems
+            </div>
+            <div className="card-body" style={{ padding: 0 }}>
+              {hiddenStars.length === 0 ? (
+                <div style={{ padding: 'var(--space-6)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>No hidden gems found.</div>
+              ) : hiddenStars.map(item => (
+                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-3) var(--space-6)', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.name}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--success)' }}>
+                    {formatPct(item.cm_percent || item.margin_pct)}
+                  </span>
                 </div>
               ))}
             </div>
           </div>
-        </div>
-      )}
 
-      <div className="grid-2" style={{ marginBottom: 24 }}>
-        {/* CM% Per Category Chart */}
-        <div className="card">
-          <div className="card-header">📊 Average CM% per Category</div>
-          <div className="card-body">
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={categoryData} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
-                <XAxis dataKey="category" tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
-                <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
-                <Tooltip cursor={{ fill: 'var(--surface2)' }} contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                <Bar dataKey="avg_cm_pct" fill="var(--blue)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="card" style={{ flex: 1 }}>
+            <div className="card-header" style={{ color: 'var(--danger)' }}>
+              Underperformers
+            </div>
+            <div className="card-body" style={{ padding: 0 }}>
+              {riskItems.length === 0 ? (
+                <div style={{ padding: 'var(--space-6)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>No items at risk.</div>
+              ) : riskItems.slice(0, 5).map(item => (
+                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-3) var(--space-6)', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.name}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--danger)' }}>
+                    {formatPct(item.cm_percent || item.margin_pct)}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        </motion.div>
+      </StaggerReveal>
 
-        {/* Peak Hours Chart */}
-        <div className="card">
-          <div className="card-header">⏰ Orders by Hour</div>
+      {/* Peak Hours + Quadrant Drift */}
+      <StaggerReveal className="grid-2" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
+        <motion.div className="card" variants={staggerItem}>
+          <div className="card-header">Orders by Hour</div>
           <div className="card-body">
             {peakHours.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>No hourly data available.</div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--space-10)' }}>No hourly data available.</div>
             ) : (
               <ResponsiveContainer width="100%" height={250}>
                 <BarChart data={peakHours.sort((a, b) => a.hour - b.hour)} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
-                  <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} />
-                  <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 12 }} />
-                  <Tooltip contentStyle={{ backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)' }} />
-                  <Bar dataKey="order_count" fill="var(--purple)" radius={[4, 4, 0, 0]} name="Orders" />
+                  <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+                  <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+                  <Tooltip contentStyle={chartTooltipStyle} />
+                  <Bar dataKey="order_count" fill="var(--data-5)" radius={[4, 4, 0, 0]} name="Orders" />
                 </BarChart>
               </ResponsiveContainer>
             )}
           </div>
-        </div>
-      </div>
-
-      <div className="grid-2" style={{ marginBottom: 24 }}>
-        {/* Quick View Lists */}
-        <div>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <div className="card-header" style={{ color: 'var(--purple)' }}>🔍 Top 3 Hidden Stars</div>
-            <div className="card-body">
-              {hiddenStars.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No hidden stars found.</div> : hiddenStars.map(item => (
-                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: 13 }}>{item.name}</span>
-                  <span style={{ fontSize: 12, color: 'var(--purple)', fontWeight: 600 }}>CM: {item.cm_percent || item.margin_pct}%</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-header" style={{ color: 'var(--red)' }}>⚠️ Top 3 Risk Items</div>
-            <div className="card-body">
-              {riskItems.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No items at risk.</div> : riskItems.map(item => (
-                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: 13 }}>{item.name}</span>
-                  <span style={{ fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>CM: {item.cm_percent || item.margin_pct}%</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        </motion.div>
 
         {/* Quadrant Drift Alerts */}
-        <div className="card">
-          <div className="card-header" style={{ color: 'var(--amber)' }}>📈 Quadrant Drift Alerts</div>
+        <motion.div className="card" variants={staggerItem}>
+          <div className="card-header" style={{ color: 'var(--warning)' }}>Quadrant Drift Alerts</div>
           <div className="card-body">
             {driftItems.length === 0 ? (
               <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No significant quadrant shifts detected.</div>
             ) : driftItems.slice(0, 5).map((item, i) => (
-              <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+              <div key={i} style={{ padding: 'var(--space-2) 0', borderBottom: '1px solid var(--border-subtle)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</span>
-                  <span style={{
-                    fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                    background: item.drift_direction.includes('dog') || item.drift_direction.includes('→ dog') ? 'var(--red)' : 'var(--amber)',
-                    color: '#fff',
-                  }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.name}</span>
+                  <span className={`tag ${item.drift_direction.includes('dog') ? 'tag-red' : 'tag-amber'}`}>
                     {item.drift_direction}
                   </span>
                 </div>
@@ -238,31 +372,39 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </motion.div>
+      </StaggerReveal>
 
       {/* Orders by Type */}
       {metrics.orders_by_type?.length > 0 && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-header">📦 Orders by Type (30d)</div>
-          <div className="card-body">
-            <div style={{ display: 'flex', gap: 16 }}>
-              {metrics.orders_by_type.map((t, i) => (
-                <div key={i} style={{
-                  flex: 1, padding: 16, background: 'var(--surface2)',
-                  borderRadius: 8, textAlign: 'center',
-                }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'capitalize' }}>
+        <ScrollReveal variants={fadeInUp}>
+          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+            <div className="card-header">Orders by Type (30d)</div>
+            <div className="card-body">
+              <div style={{ display: 'flex', gap: 'var(--space-4)' }}>
+                {metrics.orders_by_type.map((t, i) => (
+                  <motion.div key={i} style={{
+                    flex: 1, padding: 'var(--space-4)', background: 'var(--bg-elevated)',
+                    borderRadius: 'var(--radius-md)', textAlign: 'center',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: i * 0.1, duration: 0.4 }}
+                    whileHover={{ scale: 1.03, transition: { duration: 0.15 } }}
+                  >
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     {t.type?.replace('_', ' ')}
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 700 }}>{t.count}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>₹{t.revenue?.toLocaleString()}</div>
-                </div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, color: 'var(--text-primary)', margin: '4px 0' }}>{t.count}</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>{formatRupees(t.revenue)}</div>
+                </motion.div>
               ))}
             </div>
           </div>
         </div>
+        </ScrollReveal>
       )}
-    </div>
+    </motion.div>
   )
 }
