@@ -41,10 +41,11 @@ SKIP_WORDS = {"aur", "and", "or", "ya", "bhi", "with", "dena", "lao",
               "bring", "make", "put", "take", "also", "just", "some",
               "more", "less", "big", "small", "large", "plate", "glass",
               # Hinglish fillers
-              "miya", "bhai", "milay", "kiya", "uske", "saath", "bhi",
+              "miya", "mia", "bhai", "milay", "kiya", "uske", "saath", "bhi",
               "chahiye", "mat", "maat", "nahi", "ek", "do", "teen",
               "chaar", "paanch", "kuch", "sab", "wala", "wali", "wale",
               "e", "hi", "yeh", "woh", "kya",
+              "jara", "zara", "deena", "na", "toh", "bas",
               # Devanagari equivalents (fallback if transliteration missed)
               "और", "या", "भी", "देना", "दे", "लाओ", "चाहिए",
               "भैया", "भइया", "भाई", "जी", "हाँ", "हां"}
@@ -430,7 +431,7 @@ def extract_all_items(text: str, corpus: dict) -> list:
     # Single words = high false positive risk, need high threshold
     # With hybrid scoring 2/3-word windows can use 0.75+; 1-word needs 0.75+
     # (safely lowered from 0.90 because word-in-corpus fallback is precise)
-    MIN_CONF = {3: 0.75, 2: 0.78, 1: 0.75}
+    MIN_CONF = {3: 0.85, 2: 0.78, 1: 0.75}
 
     for window_size in [3, 2, 1]:
         min_confidence = MIN_CONF[window_size]

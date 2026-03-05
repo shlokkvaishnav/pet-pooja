@@ -81,7 +81,8 @@ PHONETIC_CORRECTIONS = {
     # Naan variants
     "nan": "naan", "naaan": "naan",
     # Roti variants
-    "rotee": "roti", "rooti": "roti",
+    "rotee": "roti", "rooti": "roti", "rodi": "roti", "rodi": "roti",
+    "rothi": "roti",
     # Tikka variants
     "tika": "tikka", "teeka": "tikka", "tikkah": "tikka",
     # Dal variants

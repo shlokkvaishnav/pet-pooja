@@ -23,6 +23,8 @@ class MockItem:
         self.aliases = aliases
         self.selling_price = selling_price
         self.modifiers = modifiers
+        self.is_available = True
+        self.current_stock = None
 
 
 # Mock menu items (simulates what DB would return)

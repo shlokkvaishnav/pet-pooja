@@ -8,7 +8,7 @@ python-multipart
 
 # Database (Supabase PostgreSQL)
 sqlalchemy==2.0.36
-psycopg2-binary==2.9.10
+psycopg2-binary>=2.9.10
 
 # Data processing
 pandas
@@ -22,6 +22,7 @@ faster-whisper
 
 # Voice Activity Detection -- filters noise before Whisper (fully local)
 torch
+torchaudio
 
 # Fuzzy text matching (Person B - item matching)
 rapidfuzz
