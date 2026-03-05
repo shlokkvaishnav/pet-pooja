@@ -21,6 +21,7 @@ Model selection (via WHISPER_MODEL env var):
 Requires: pip install faster-whisper torch + ffmpeg installed.
 """
 
+import asyncio
 import os
 import subprocess
 import shutil
@@ -97,6 +98,7 @@ def convert_to_wav(input_path: str) -> str:
     Browser MediaRecorder produces webm/opus.
     Whisper needs WAV 16kHz mono.
     Converts any audio format to WAV using ffmpeg (local tool).
+    Synchronous version — used by the Whisper pipeline.
     """
     output_path = input_path.rsplit(".", 1)[0] + "_converted.wav"
     ffmpeg_path = _find_ffmpeg()
@@ -107,6 +109,27 @@ def convert_to_wav(input_path: str) -> str:
         "-ac", "1",               # mono channel
         output_path
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_path
+
+
+async def convert_to_wav_async(input_path: str) -> str:
+    """
+    Async version of convert_to_wav.
+    Uses asyncio.create_subprocess_exec so the event loop can serve
+    other requests while ffmpeg runs (important for concurrent voice orders).
+    """
+    output_path = input_path.rsplit(".", 1)[0] + "_converted.wav"
+    ffmpeg_path = _find_ffmpeg()
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg_path, "-y",
+        "-i", input_path,
+        "-ar", "16000",
+        "-ac", "1",
+        output_path,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
     return output_path
 
 

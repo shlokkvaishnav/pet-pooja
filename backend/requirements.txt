@@ -38,5 +38,8 @@ pydub
 # Session persistence — Redis preferred, DB fallback built-in
 redis>=5.0.0
 
+# JWT authentication
+PyJWT>=2.8.0
+
 # Utilities
 python-dotenv

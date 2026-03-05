@@ -8,13 +8,16 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
-from database import engine, Base, SessionLocal
+from database import engine, Base, SessionLocal, get_db
 from api.routes_revenue import router as revenue_router
 from api.routes_voice import router as voice_router
+from api.auth import require_auth, authenticate_staff
+from api.rate_limit import rate_limit_middleware
 
 # ── Structured logging ──
 logging.basicConfig(
@@ -82,6 +85,9 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
+# ── Rate limiting middleware ──
+app.middleware("http")(rate_limit_middleware)
+
 
 # ── Global exception handler ──
 @app.exception_handler(Exception)
@@ -93,9 +99,48 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ── Route registration ──
-app.include_router(revenue_router, prefix="/api/revenue", tags=["Revenue"])
-app.include_router(voice_router, prefix="/api/voice", tags=["Voice"])
+# ── Route registration (auth-gated when AUTH_ENABLED=true) ──
+app.include_router(
+    revenue_router,
+    prefix="/api/revenue",
+    tags=["Revenue"],
+    dependencies=[Depends(require_auth)],
+)
+app.include_router(
+    voice_router,
+    prefix="/api/voice",
+    tags=["Voice"],
+    dependencies=[Depends(require_auth)],
+)
+
+
+# ── Auth endpoints (always public) ──
+
+class LoginInput(BaseModel):
+    pin: str = Field(..., min_length=4, max_length=6, pattern=r"^\d{4,6}$")
+
+
+@app.post("/api/auth/login", tags=["Auth"])
+def login(body: LoginInput, db=Depends(get_db)):
+    """Authenticate staff via PIN → JWT token."""
+    return authenticate_staff(body.pin, db)
+
+
+# ── FAISS index management ──
+
+@app.post("/api/voice/rebuild-index", tags=["Voice"], dependencies=[Depends(require_auth)])
+def rebuild_faiss_index(db=Depends(get_db)):
+    """
+    Force-rebuild the FAISS semantic index from current DB menu items.
+    Call this after menu item create/update/delete to keep the index current.
+    """
+    from modules.voice.item_matcher import rebuild_index
+    corpus = rebuild_index(db)
+    # Also update the pipeline's corpus reference
+    pipeline = getattr(app.state, "voice_pipeline", None)
+    if pipeline:
+        pipeline.corpus = corpus
+    return {"status": "ok", "corpus_size": len(corpus)}
 
 
 @app.get("/api/health")

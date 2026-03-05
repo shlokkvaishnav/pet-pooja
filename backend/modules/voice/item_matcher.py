@@ -192,6 +192,42 @@ class _SemanticIndex:
 # Module-level singleton — shared across all calls
 _semantic_index = _SemanticIndex()
 
+# Module-level corpus cache for index invalidation
+_current_corpus: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Alias validation
+# ---------------------------------------------------------------------------
+
+_ALIAS_MAX_LENGTH = 500          # max total length of aliases field
+_ALIAS_MAX_PER_ITEM = 20         # max number of pipe-separated aliases
+_ALIAS_VALID_RE = re.compile(r"^[\w\s\-'.,()/&]+$", re.UNICODE)
+
+
+def validate_aliases(aliases: str | None) -> str:
+    """
+    Sanitize and validate a pipe-separated alias string.
+    Strips dangerous characters, truncates, deduplicates.
+    Returns the cleaned alias string.
+    """
+    if not aliases:
+        return ""
+
+    parts = [a.strip() for a in aliases.split("|") if a.strip()]
+    cleaned = []
+    for part in parts[:_ALIAS_MAX_PER_ITEM]:
+        if len(part) > 100:
+            part = part[:100]
+        if _ALIAS_VALID_RE.match(part):
+            cleaned.append(part)
+        else:
+            logger.warning("Rejected alias with invalid characters: %r", part[:50])
+    result = "|".join(cleaned)
+    if len(result) > _ALIAS_MAX_LENGTH:
+        result = result[:_ALIAS_MAX_LENGTH].rsplit("|", 1)[0]
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Corpus builder
@@ -203,6 +239,7 @@ def build_search_corpus(menu_items: list) -> dict:
     Returns: { "alias string" -> item_id }
     Also rebuilds the semantic FAISS index in one go.
     """
+    global _current_corpus
     corpus = {}
     for item in menu_items:
         entries = []
@@ -211,7 +248,8 @@ def build_search_corpus(menu_items: list) -> dict:
         if item.name_hi:
             entries.append(item.name_hi.strip())
         if hasattr(item, "aliases") and item.aliases:
-            for alias in item.aliases.split("|"):
+            clean = validate_aliases(item.aliases)
+            for alias in clean.split("|"):
                 alias = alias.strip().lower()
                 if alias:
                     entries.append(alias)
@@ -221,6 +259,31 @@ def build_search_corpus(menu_items: list) -> dict:
 
     # Build semantic index from the full corpus
     _semantic_index.build(corpus)
+    _current_corpus = corpus
+    return corpus
+
+
+def invalidate_index():
+    """
+    Mark the FAISS index as stale. The next call to rebuild_index_if_needed()
+    will re-read menu items from DB and rebuild.
+    Called when menu items are created, updated, or deleted.
+    """
+    global _current_corpus
+    _semantic_index._ready = False
+    _current_corpus = {}
+    logger.info("FAISS index invalidated — will rebuild on next pipeline use")
+
+
+def rebuild_index(db_session) -> dict:
+    """
+    Force-rebuild the FAISS index from current DB state.
+    Returns the new corpus dict.
+    """
+    from models import MenuItem
+    menu_items = db_session.query(MenuItem).filter(MenuItem.is_available == True).all()
+    corpus = build_search_corpus(menu_items)
+    logger.info("FAISS index rebuilt with %d corpus entries from %d menu items", len(corpus), len(menu_items))
     return corpus
 
 
