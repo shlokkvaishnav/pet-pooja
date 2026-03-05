@@ -53,6 +53,7 @@ export default function ItemTable({ items, categoryFilter, quadrantFilter }) {
             Popularity {sortBy === 'popularity_score' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
           </th>
           <th>Quadrant</th>
+          <th>Trend</th>
           <th>Action</th>
         </tr>
       </thead>
@@ -76,6 +77,19 @@ export default function ItemTable({ items, categoryFilter, quadrantFilter }) {
               </div>
             </td>
             <td>{quadrantTag(item.quadrant)}</td>
+            <td>
+              {item.revenue_trend_arrow ? (
+                <span style={{
+                  fontSize: 13,
+                  color: item.revenue_trend_pct > 0 ? 'var(--green)' : item.revenue_trend_pct < 0 ? 'var(--red)' : 'var(--text-muted)',
+                  fontWeight: 600,
+                }} title={`Revenue: ${item.revenue_trend_pct > 0 ? '+' : ''}${item.revenue_trend_pct}% | Pop: ${item.popularity_trend_arrow}`}>
+                  {item.revenue_trend_arrow}
+                </span>
+              ) : (
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</span>
+              )}
+            </td>
             <td style={{ fontSize: 11, color: 'var(--text-muted)', maxWidth: 200 }}>
               <div style={{ fontWeight: 600 }}>{item.action_recommendation}</div>
             </td>

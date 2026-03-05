@@ -391,11 +391,7 @@ body {
   display: flex;
   width: max-content;
   animation: marqueeScroll 35s linear infinite;
-  /* Pause on hover for readability */
-}
-
-.lp-marquee-section:hover .lp-marquee-track {
-  animation-play-state: paused;
+  /* Pause on hover for readability removed per request */
 }
 
 .lp-marquee-content {
@@ -415,18 +411,11 @@ body {
   font-size: 22px;
   font-weight: 800;
   letter-spacing: -0.01em;
-  color: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.35);
   white-space: nowrap;
   transition: all 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   cursor: default;
   text-transform: uppercase;
-}
-
-.lp-marquee-name:hover {
-  color: rgba(255, 255, 255, 0.9);
-  transform: scale(1.25);
-  text-shadow: 0 0 30px rgba(212, 41, 31, 0.5), 0 0 60px rgba(212, 41, 31, 0.2);
-  filter: brightness(1.2);
 }
 
 .lp-marquee-dot {
@@ -477,17 +466,25 @@ body {
 
 .lp-features-inner {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
 }
 
 .lp-feature-item {
-  padding: 40px 32px;
+  padding: 80px 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   transition: background 0.3s;
 }
 
-.lp-feature-item:last-child {
+.lp-feature-item:nth-child(even) {
   border-right: none;
+}
+
+.lp-feature-item:nth-child(n+3) {
+  border-bottom: none;
 }
 
 .lp-feature-item:hover {
@@ -504,16 +501,16 @@ body {
 }
 
 .lp-feature-item h3 {
-  font-size: 16px;
+  font-size: 26px;
   font-weight: 700;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
   color: #fff;
 }
 
 .lp-feature-item p {
-  font-size: 13px;
-  line-height: 1.7;
-  color: rgba(255, 255, 255, 0.4);
+  font-size: 16px;
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.65);
 }
 
 /* ─── About Section ─── */
@@ -1261,6 +1258,48 @@ body {
   }
 }
 
+/* ─── CTA Section ─── */
+.lp-cta-section {
+  text-align: center;
+  padding: 100px 24px;
+  background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.85)), url('/images/chalk.jpg') center/cover no-repeat;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.lp-cta-section h2 {
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 16px;
+  color: #fff;
+}
+
+.lp-cta-section p {
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 40px;
+}
+
+.lp-cta {
+  background: #fff;
+  color: #000;
+  border: none;
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 16px 36px;
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.lp-cta:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 10px 30px rgba(255, 255, 255, 0.2);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .sidebar {
@@ -1307,8 +1346,12 @@ body {
   }
 
   .lp-feature-item {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    border-right: none !important;
+    border-bottom: 1px solid var(--border) !important;
+  }
+
+  .lp-feature-item:last-child {
+    border-bottom: none !important;
   }
 
   .lp-about-inner {
