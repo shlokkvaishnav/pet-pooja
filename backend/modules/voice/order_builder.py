@@ -191,6 +191,34 @@ def save_order_to_db(order: dict, kot: dict, db: Session, restaurant_id: int | N
         Exception: rolls back transaction on any error
     """
     try:
+        items = order.get("items") or []
+        if not items:
+            raise ValueError("Order must contain at least one item")
+
+        for i, item in enumerate(items):
+            item_id = item.get("item_id")
+            if item_id is None:
+                raise ValueError(f"Item at index {i}: missing item_id")
+            try:
+                item_id = int(item_id)
+            except (TypeError, ValueError):
+                raise ValueError(f"Item at index {i}: item_id must be an integer")
+            if item_id <= 0:
+                raise ValueError(f"Item at index {i}: item_id must be positive")
+            qty = item.get("quantity", 1)
+            try:
+                qty = int(qty) if qty is not None else 1
+            except (TypeError, ValueError):
+                raise ValueError(f"Item at index {i}: quantity must be an integer")
+            if qty < 1 or qty > 999:
+                raise ValueError(f"Item at index {i}: quantity must be between 1 and 999")
+            unit_price = float(item.get("unit_price", 0) or 0)
+            if unit_price < 0:
+                raise ValueError(f"Item at index {i}: unit_price cannot be negative")
+            line_total = float(item.get("line_total", 0) or 0)
+            if line_total < 0:
+                raise ValueError(f"Item at index {i}: line_total cannot be negative")
+
         # Resolve restaurant_id — use provided value or fall back to first restaurant
         if not restaurant_id:
             first_restaurant = db.query(Restaurant).order_by(Restaurant.id.asc()).first()
@@ -209,6 +237,7 @@ def save_order_to_db(order: dict, kot: dict, db: Session, restaurant_id: int | N
             order_type=order.get("order_type", "dine_in"),
             table_number=order.get("table_number"),
             source="voice",
+            settled_at=datetime.now(timezone.utc),
         )
         db.add(db_order)
         db.flush()

@@ -322,9 +322,10 @@ def reload_menu(db=Depends(get_db)):
 @app.get("/api/health")
 def health():
     """Health check endpoint with TTS + LLM status."""
+    from config import APP_NAME
     result = {
         "status": "healthy",
-        "service": "sizzle-ai-copilot",
+        "service": APP_NAME,
         "version": _APP_VERSION,
         "pipeline_loaded": getattr(app.state, "voice_pipeline", None) is not None,
     }

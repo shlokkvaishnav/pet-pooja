@@ -21,22 +21,23 @@ _project_root = _backend_dir.parent
 load_dotenv(_backend_dir / ".env")
 load_dotenv(_project_root / ".env")  # fallback to project root .env
 
+from config import DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_RECYCLE, SQLITE_PATH
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
     engine = create_engine(
         DATABASE_URL,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=DB_POOL_SIZE,
+        max_overflow=DB_MAX_OVERFLOW,
         pool_pre_ping=True,
-        pool_recycle=300,  # recycle connections every 5 min
+        pool_recycle=DB_POOL_RECYCLE,
         echo=False,
     )
     logger.info("Connected to PostgreSQL database")
 else:
     # Fallback to local SQLite for development / testing
-    _sqlite_path = Path(__file__).parent / "petpooja.db"
-    DATABASE_URL = f"sqlite:///{_sqlite_path}"
+    DATABASE_URL = f"sqlite:///{SQLITE_PATH}"
     engine = create_engine(
         DATABASE_URL,
         connect_args={"check_same_thread": False},
@@ -45,7 +46,7 @@ else:
     logger.warning(
         "DATABASE_URL not set — using local SQLite at %s. "
         "Set DATABASE_URL in backend/.env for production.",
-        _sqlite_path,
+        SQLITE_PATH,
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -1,99 +1,60 @@
-# 🍽️ Petpooja AI Copilot
+# Sizzle — Restaurant Revenue & Voice Ordering
 
-**Restaurant Revenue Intelligence & Voice Ordering** — v0.1.0
-
-> Fully offline. No external APIs. Everything runs locally with SQLite, faster-whisper, and rule-based NLP.
+**Revenue intelligence, combo engine, and voice ordering** — runs locally with SQLite (or PostgreSQL via `DATABASE_URL`), faster-whisper STT, and optional Ollama for summaries.
 
 ---
 
-## 📂 Project Structure
+## Project structure
 
 ```
-petpooja-copilot/
-│
+sizzle/
 ├── backend/
-│   ├── main.py                        # FastAPI app entry point
-│   ├── database.py                    # SQLAlchemy engine + session (SQLite)
-│   ├── models.py                      # ORM models
+│   ├── main.py              # FastAPI app
+│   ├── database.py          # SQLAlchemy (SQLite or Postgres)
+│   ├── config.py            # Env-based config
+│   ├── models.py            # ORM models
 │   ├── requirements.txt
-│   │
-│   ├── data/
-│   │   ├── seed_data.py               # Mock data generator — RUN FIRST
-│   │   ├── restaurant.db              # SQLite DB (auto-created)
-│   │   └── sample_menu.json           # 34-item menu with Hindi names
-│   │
-│   ├── modules/
-│   │   ├── revenue/
-│   │   │   ├── __init__.py
-│   │   │   ├── analyzer.py            # Main orchestrator
-│   │   │   ├── contribution_margin.py # CM calculation + tier classification
-│   │   │   ├── popularity.py          # Sales velocity + scoring
-│   │   │   ├── menu_matrix.py         # BCG quadrant classification
-│   │   │   ├── hidden_stars.py        # High CM, low visibility detection
-│   │   │   ├── combo_engine.py        # Frequent itemset combo mining
-│   │   │   └── price_optimizer.py     # Rule-based price recommendations
-│   │   │
-│   │   └── voice/
-│   │       ├── __init__.py
-│   │       ├── pipeline.py            # Main orchestrator
-│   │       ├── stt.py                 # faster-whisper STT (local)
-│   │       ├── normalizer.py          # Hindi/Hinglish text normalization
-│   │       ├── intent_mapper.py       # Rule-based intent classification
-│   │       ├── item_matcher.py        # Fuzzy matching (rapidfuzz)
-│   │       ├── quantity_extractor.py  # Qty from text (En/Hi/Hinglish)
-│   │       ├── modifier_extractor.py  # Spice/size/add-on extraction
-│   │       ├── upsell_engine.py       # Real-time upsell from co-occurrence
-│   │       └── order_builder.py       # JSON order + KOT generator
-│   │
-│   └── api/
-│       ├── routes_revenue.py          # /api/revenue/* endpoints
-│       └── routes_voice.py            # /api/voice/* endpoints
+│   ├── seed_database.py     # Seed DB (run once)
+│   ├── api/
+│   │   ├── routes_auth.py   # Login, /me
+│   │   ├── routes_ops.py    # Orders, tables, inventory, reports, settings
+│   │   ├── routes_revenue.py# Dashboard, combos, pricing, analytics
+│   │   └── routes_voice.py  # Transcribe, process, confirm order
+│   └── modules/
+│       ├── revenue/         # Analyzer, combo_engine, price_optimizer, etc.
+│       └── voice/           # Pipeline, STT, item_matcher, order_builder, TTS
 │
 ├── frontend/
 │   ├── index.html
 │   ├── package.json
 │   ├── vite.config.js
 │   └── src/
-│       ├── App.jsx                    # Router + sidebar layout
-│       ├── main.jsx                   # React entry point
-│       ├── index.css                  # Design system (dark theme)
-│       ├── api/
-│       │   └── client.js              # Axios API client
-│       ├── pages/
-│       │   ├── Dashboard.jsx          # Overview + key metrics
-│       │   ├── MenuAnalysis.jsx       # BCG matrix + item table
-│       │   ├── ComboEngine.jsx        # Combo recommendation cards
-│       │   └── VoiceOrder.jsx         # Voice recorder + live order
+│       ├── App.jsx
+│       ├── main.jsx
+│       ├── config.js        # VITE_* and app constants
+│       ├── api/client.js
+│       ├── pages/            # Dashboard, MenuAnalysis, ComboEngine, VoiceOrder, Orders, Tables, etc.
 │       └── components/
-│           ├── MetricCard.jsx         # KPI cards
-│           ├── MenuMatrix.jsx         # 2×2 BCG scatter chart
-│           ├── ItemTable.jsx          # Sortable data table
-│           ├── ComboCard.jsx          # Combo suggestion card
-│           ├── VoiceRecorder.jsx      # Record button + mic access
-│           ├── OrderSummary.jsx       # Live order display
-│           └── KOTTicket.jsx          # Kitchen order ticket UI
 │
 └── README.md
 ```
 
-## 🚀 Quick Start
+---
 
-### 1. Backend
+## Quick start
+
+### Backend
 
 ```bash
 cd backend
 pip install -r requirements.txt
-
-# Seed the database (run once)
-python data/seed_data.py
-
-# Start the server
+python seed_database.py   # once, to create DB and sample data
 python main.py
 ```
 
-Backend runs at `http://localhost:8000`
+Server: `http://localhost:8000`. Without `DATABASE_URL`, SQLite is used (`backend/petpooja.db`).
 
-### 2. Frontend
+### Frontend
 
 ```bash
 cd frontend
@@ -101,40 +62,35 @@ npm install
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000` (proxies API to backend)
+Frontend: `http://localhost:3000` (Vite proxies `/api` to the backend).
 
-## 📡 API Endpoints
+---
 
-### Revenue Intelligence
+## Main features
 
-| Endpoint | Description |
-|---|---|
-| `GET /api/revenue/analyze` | Full revenue analysis pipeline |
-| `GET /api/revenue/margins` | Contribution margins for all items |
-| `GET /api/revenue/popularity` | Sales velocity & popularity scores |
-| `GET /api/revenue/matrix` | BCG quadrant classification |
-| `GET /api/revenue/hidden-stars` | High-margin underperforming items |
-| `GET /api/revenue/combos` | Combo recommendations |
-| `GET /api/revenue/pricing` | Price optimization suggestions |
+- **Revenue**: Dashboard, menu matrix, hidden stars, risks, combos, price recommendations, category breakdown, trends, advanced analytics.
+- **Voice**: Record or type orders; STT (faster-whisper), item matching, modifiers, upsell; confirm order and save to DB.
+- **Ops**: Orders, tables (book/settle/reserve), menu items, inventory, reports, settings.
 
-### Voice Ordering
+---
 
-| Endpoint | Description |
-|---|---|
-| `POST /api/voice/order` | Process audio file (multipart) |
-| `POST /api/voice/order/text` | Process text order directly |
+## API overview
 
-## 🔧 Tech Stack
+| Area        | Examples |
+|------------|----------|
+| Auth       | `POST /api/auth/login`, `GET /api/auth/me/{id}` |
+| Ops        | `GET/POST/PATCH /api/ops/orders`, `GET/PATCH /api/ops/tables`, `GET /api/ops/settings`, `GET /api/ops/public-config` |
+| Revenue    | `GET /api/revenue/dashboard`, `GET /api/revenue/combos`, `GET /api/revenue/price-recommendations`, … |
+| Voice      | `POST /api/voice/transcribe`, `POST /api/voice/process`, `POST /api/voice/confirm-order` |
 
-| Layer | Technology |
-|---|---|
-| Backend | FastAPI + SQLAlchemy + SQLite |
-| STT | faster-whisper (local, offline) |
-| NLP | Rule-based (no external LLMs) |
-| Matching | rapidfuzz (fuzzy string matching) |
-| Combos | Frequent itemset mining |
-| Frontend | React + Vite + Recharts |
+---
 
-## 📄 License
+## Tech stack
 
-See [LICENSE](LICENSE) for details.
+| Layer   | Tech |
+|--------|------|
+| Backend | FastAPI, SQLAlchemy, SQLite / PostgreSQL |
+| STT     | faster-whisper (local) |
+| TTS     | Parler-TTS (optional) |
+| LLM     | Optional Ollama for summaries |
+| Frontend| React, Vite, Recharts |

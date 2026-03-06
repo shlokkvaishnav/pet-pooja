@@ -1,4 +1,5 @@
 import { createContext, useContext, useState } from 'react'
+import { RESTAURANT_STORAGE_KEY } from '../config'
 
 const AuthContext = createContext()
 
@@ -8,21 +9,21 @@ export function AuthProvider({ children }) {
     })
 
     const [restaurant, setRestaurant] = useState(() => {
-        const saved = localStorage.getItem('sizzle_restaurant')
+        const saved = localStorage.getItem(RESTAURANT_STORAGE_KEY)
         if (!saved) return null
         try { return JSON.parse(saved) } catch { return null }
     })
 
     const login = (restaurantData) => {
         localStorage.setItem('sizzle_auth', 'true')
-        localStorage.setItem('sizzle_restaurant', JSON.stringify(restaurantData))
+        localStorage.setItem(RESTAURANT_STORAGE_KEY, JSON.stringify(restaurantData))
         setRestaurant(restaurantData)
         setIsLoggedIn(true)
     }
 
     const logout = () => {
         localStorage.removeItem('sizzle_auth')
-        localStorage.removeItem('sizzle_restaurant')
+        localStorage.removeItem(RESTAURANT_STORAGE_KEY)
         setRestaurant(null)
         setIsLoggedIn(false)
     }

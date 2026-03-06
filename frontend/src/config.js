@@ -44,3 +44,10 @@ export const DEMO_MODE = (import.meta.env.VITE_DEMO_MODE || 'true') === 'true'
 
 // Retry
 export const TRANSIENT_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
+export const API_RETRY_BACKOFF_BASE_MS = Number(import.meta.env.VITE_API_RETRY_BACKOFF_BASE_MS || 200)
+
+// Storage key for current restaurant (avoid hardcoded string in app code)
+export const RESTAURANT_STORAGE_KEY = import.meta.env.VITE_RESTAURANT_STORAGE_KEY || 'sizzle_restaurant'
+
+// Default combo discount % (fallback until public-config is loaded from API)
+export const DEFAULT_COMBO_DISCOUNT_PCT = Number(import.meta.env.VITE_DEFAULT_COMBO_DISCOUNT_PCT || 10)
