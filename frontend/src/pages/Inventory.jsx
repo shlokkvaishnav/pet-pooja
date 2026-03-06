@@ -25,6 +25,7 @@ export default function Inventory() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [lowOnly, setLowOnly] = useState(false)
   const [page, setPage] = useState(1)
   const [updates, setUpdates] = useState({})
@@ -45,10 +46,10 @@ export default function Inventory() {
       days: 30,
       limit,
       offset: (page - 1) * limit,
-      search: search || undefined,
+      search: debouncedSearch || undefined,
       low_stock_only: lowOnly || undefined,
     }),
-    [page, search, lowOnly],
+    [page, debouncedSearch, lowOnly],
   )
 
   const refreshInventory = () => getOpsInventoryFiltered(params).then(setData)
@@ -129,12 +130,16 @@ export default function Inventory() {
         </div>
         <div className="card-body">
           <div className="filters-row inventory-filters-row">
-            <input
-              className="input"
-              placeholder="Search ingredient"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-            />
+            <div className="search-input-wrap">
+              <input
+                className="input"
+                placeholder="Search ingredient"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { setDebouncedSearch(search.trim()); setPage(1) } }}
+              />
+              {loading && <span className="search-dots"><span /><span /><span /></span>}
+            </div>
             <label className="checkbox-row">
               <input type="checkbox" checked={lowOnly} onChange={(e) => { setLowOnly(e.target.checked); setPage(1) }} />
               Low stock only

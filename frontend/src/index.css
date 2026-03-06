@@ -3700,6 +3700,43 @@ body {
   box-shadow: 0 0 0 2px rgba(200, 69, 10, 0.2);
 }
 
+/* Search input loading animation */
+.search-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.search-input-wrap .input {
+  width: 100%;
+  padding-right: 38px;
+}
+.search-dots {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+.search-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: searchDotPulse 1s ease-in-out infinite;
+}
+.search-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.search-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes searchDotPulse {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.2); }
+}
+
 .pagination {
   display: flex;
   align-items: center;

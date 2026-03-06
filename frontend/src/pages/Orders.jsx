@@ -40,11 +40,6 @@ export default function Orders() {
   const [cancelModal, setCancelModal] = useState(null)
   const limit = ORDERS_PAGE_LIMIT
 
-  useEffect(() => {
-    const id = setTimeout(() => setDebouncedSearch(search.trim()), 300)
-    return () => clearTimeout(id)
-  }, [search])
-
   const params = useMemo(
     () => ({
       limit,
@@ -280,12 +275,16 @@ export default function Orders() {
         <div className="card-header">Filters</div>
         <div className="card-body">
           <div className="filters-row orders-filters-row">
-            <input
-              className="input"
-              placeholder="Search order id or number"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-            />
+            <div className="search-input-wrap">
+              <input
+                className="input"
+                placeholder="Search order id or number"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { setDebouncedSearch(search.trim()); setPage(1) } }}
+              />
+              {loading && <span className="search-dots"><span /><span /><span /></span>}
+            </div>
             <select className="input" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }}>
               <option value="">All Statuses</option>
               <option value="building">Open</option>
