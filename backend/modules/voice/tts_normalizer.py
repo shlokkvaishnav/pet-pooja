@@ -169,7 +169,6 @@ def _convert_script(text: str, language: str) -> str:
 
     try:
         from indic_transliteration import sanscript
-        from indic_transliteration.transliterate import transliterate
 
         script_enum = getattr(sanscript, target_script, None)
         if script_enum is None:
@@ -182,7 +181,7 @@ def _convert_script(text: str, language: str) -> str:
             # Already in native script
             return text
 
-        return transliterate(text, sanscript.ITRANS, script_enum)
+        return sanscript.transliterate(text, sanscript.ITRANS, script_enum)
     except ImportError:
         logger.warning("indic-transliteration not installed — skipping script conversion")
         return text

@@ -354,7 +354,7 @@ def test_rate_limiting():
         with open("main.py", "r", encoding="utf-8") as f:
             source = f.read()
         assert "rate_limit_middleware" in source, "rate_limit_middleware not imported"
-        assert "app.middleware("http")(rate_limit_middleware)" in source, "rate limit middleware not wired"
+        assert 'app.middleware("http")(rate_limit_middleware)' in source, "rate limit middleware not wired"
         _pass("main.py wires in-process rate limiting middleware")
     except AssertionError as e:
         _fail("main.py rate limit middleware", str(e))
