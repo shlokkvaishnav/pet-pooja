@@ -1,4 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
+import { Mic } from 'lucide-react'
+
+const VISUALIZER_BARS = 48
 
 export default function VoiceRecorder({ onRecorded }) {
   const [state, setState] = useState('idle') // idle | recording | processing
@@ -7,12 +10,48 @@ export default function VoiceRecorder({ onRecorded }) {
   const analyserRef = useRef(null)
   const animFrameRef = useRef(null)
   const [levels, setLevels] = useState([0, 0, 0, 0, 0])
+  const [time, setTime] = useState(0)
+  const [barHeights, setBarHeights] = useState(
+    Array.from({ length: VISUALIZER_BARS }, () => 4)
+  )
 
+  const isRecording = state === 'recording'
+  const isProcessing = state === 'processing'
+
+  // Cleanup animation frame on unmount
   useEffect(() => {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
     }
   }, [])
+
+  // Timer: count seconds while recording
+  useEffect(() => {
+    let intervalId
+    if (isRecording) {
+      intervalId = setInterval(() => setTime(t => t + 1), 1000)
+    } else {
+      setTime(0)
+    }
+    return () => clearInterval(intervalId)
+  }, [isRecording])
+
+  // Randomise bars while recording for visual effect
+  useEffect(() => {
+    let frameId
+    if (isRecording) {
+      const animate = () => {
+        setBarHeights(
+          Array.from({ length: VISUALIZER_BARS }, () => 20 + Math.random() * 80)
+        )
+        frameId = requestAnimationFrame(animate)
+      }
+      frameId = requestAnimationFrame(animate)
+    } else {
+      setBarHeights(Array.from({ length: VISUALIZER_BARS }, () => 4))
+    }
+    return () => { if (frameId) cancelAnimationFrame(frameId) }
+  }, [isRecording])
 
   const updateLevels = (analyser) => {
     const data = new Uint8Array(analyser.frequencyBinCount)
@@ -75,71 +114,69 @@ export default function VoiceRecorder({ onRecorded }) {
     }
   }
 
-  const isRecording = state === 'recording'
-  const isProcessing = state === 'processing'
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+  }
 
-  const btnBg = isRecording
-    ? 'linear-gradient(135deg, #f87171, #ef4444)'
-    : isProcessing
-    ? 'linear-gradient(135deg, var(--bg-overlay), var(--bg-elevated))'
-    : 'linear-gradient(135deg, var(--accent), #e55a28)'
+  const handleClick = () => {
+    if (isProcessing) return
+    if (isRecording) {
+      stopRecording()
+    } else {
+      startRecording()
+    }
+  }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-      {/* Audio level bars */}
-      <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 32 }}>
-        {levels.map((l, i) => (
+    <div className="ai-voice-wrap">
+      {/* Mic / Stop button */}
+      <button
+        className={`ai-voice-btn${isRecording ? ' ai-voice-btn--active' : ''}`}
+        type="button"
+        onClick={handleClick}
+        disabled={isProcessing}
+      >
+        {isProcessing ? (
+          <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
+        ) : isRecording ? (
+          <div className="ai-voice-stop" />
+        ) : (
+          <Mic size={24} />
+        )}
+      </button>
+
+      {/* Timer */}
+      <span
+        className="ai-voice-timer"
+        style={{ opacity: isRecording ? 0.7 : 0.3 }}
+      >
+        {formatTime(time)}
+      </span>
+
+      {/* Visualizer bars */}
+      <div className="ai-voice-bars">
+        {Array.from({ length: VISUALIZER_BARS }).map((_, i) => (
           <div
             key={i}
-            style={{
-              width: 4,
-              height: `${Math.max(4, l * 32)}px`,
-              borderRadius: 2,
-              background: isRecording ? 'var(--accent)' : 'var(--bg-overlay)',
-              transition: 'height 0.08s ease',
-            }}
+            className={`ai-voice-bar${isRecording ? ' ai-voice-bar--active' : ''}`}
+            style={
+              isRecording
+                ? {
+                  height: `${barHeights[i]}%`,
+                  animationDelay: `${i * 0.05}s`,
+                }
+                : { height: 4 }
+            }
           />
         ))}
       </div>
 
-      {/* Main button */}
-      <button
-        onClick={isRecording ? stopRecording : isProcessing ? undefined : startRecording}
-        disabled={isProcessing}
-        style={{
-          width: 72,
-          height: 72,
-          borderRadius: '50%',
-          border: '2px solid transparent',
-          background: btnBg,
-          color: 'white',
-          fontSize: 24,
-          cursor: isProcessing ? 'wait' : 'pointer',
-          boxShadow: isRecording
-            ? '0 0 0 6px rgba(248,113,113,0.15)'
-            : '0 0 0 3px rgba(200,69,10,0.1)',
-          transition: 'box-shadow 0.3s, transform 0.15s',
-          animation: isRecording ? 'voicePulse 1.5s ease-in-out infinite' : 'none',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {isProcessing ? (
-          <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
-        ) : isRecording ? '⏹' : '🎤'}
-      </button>
-
-      {/* State label */}
-      <span style={{
-        fontSize: 11,
-        fontFamily: 'var(--font-body)',
-        textTransform: 'uppercase',
-        letterSpacing: '0.08em',
-        color: isRecording ? 'var(--danger)' : isProcessing ? 'var(--text-muted)' : 'var(--text-secondary)',
-      }}>
-        {isRecording ? 'Listening…' : isProcessing ? 'Processing…' : 'Tap to speak'}
-      </span>
+      {/* Status label */}
+      <p className="ai-voice-status">
+        {isProcessing ? 'Processing…' : isRecording ? 'Listening...' : 'Click to speak'}
+      </p>
     </div>
   )
 }

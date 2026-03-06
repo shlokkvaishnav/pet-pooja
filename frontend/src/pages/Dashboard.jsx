@@ -22,6 +22,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, ScrollReveal, staggerContainer, staggerItem, fadeInUp } from '../utils/animations'
 import { formatRupees, formatRupeesShort, formatPct } from '../utils/format'
+import MagicBento from '../components/MagicBento'
 import { TrendUp, TrendDown, Warning, Star, EyeSlash, ArrowRight } from '@phosphor-icons/react'
 
 const CHART_COLORS = ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316']
@@ -182,6 +183,9 @@ export default function Dashboard() {
           ))}
         </div>
       </motion.div>
+
+      {/* Magic Bento Grid */}
+      <MagicBento metrics={metrics} secondaryLoaded={secondaryLoaded} />
 
       {!secondaryLoaded && (
         <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
