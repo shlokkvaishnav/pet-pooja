@@ -133,9 +133,11 @@
 }
 
 .login-logo-text {
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+    font-family: var(--font-body), sans-serif;
+    font-size: 20px;
+    font-weight: 900;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     color: #fff;
 }
 
@@ -171,8 +173,9 @@
 }
 
 .login-form-area h1 {
+    font-family: var(--font-display), serif;
     font-size: 42px;
-    font-weight: 600;
+    font-weight: 900;
     color: #fff;
     letter-spacing: -0.04em;
     margin-bottom: 40px;
@@ -191,7 +194,7 @@
     padding: 16px 24px;
     color: #fff;
     font-size: 14px;
-    font-family: var(--font), sans-serif;
+    font-family: var(--font-body), sans-serif;
     transition: all 0.2s;
 }
 
@@ -202,9 +205,9 @@
 
 .login-input:focus {
     outline: none;
-    border-color: rgba(255, 107, 53, 0.6);
+    border-color: rgba(200, 69, 10, 0.6);
     background: rgba(255, 255, 255, 0.02);
-    box-shadow: 0 0 0 4px rgba(255, 107, 53, 0.1);
+    box-shadow: 0 0 0 4px rgba(200, 69, 10, 0.1);
 }
 
 .login-input-icon {
@@ -224,7 +227,7 @@
     text-align: right;
     font-size: 12px;
     font-weight: 600;
-    color: #ff6b35;
+    color: var(--accent);
     text-decoration: none;
     margin-top: 12px;
     margin-bottom: 40px;
@@ -237,25 +240,26 @@
 
 .login-submit-btn {
     width: 100%;
-    background: linear-gradient(90deg, #ff4e20, #d4291f);
+    background: linear-gradient(90deg, #e05010, #C8450A);
     border: none;
     border-radius: 100px;
     padding: 18px;
     color: #fff;
     font-size: 14px;
     font-weight: 700;
+    font-family: var(--font-body), sans-serif;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 12px;
     cursor: pointer;
-    box-shadow: 0 10px 30px rgba(212, 41, 31, 0.4);
+    box-shadow: 0 10px 30px rgba(200, 69, 10, 0.4);
     transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .login-submit-btn:hover {
     transform: translateY(-2px);
-    box-shadow: 0 15px 40px rgba(212, 41, 31, 0.6);
+    box-shadow: 0 15px 40px rgba(200, 69, 10, 0.6);
 }
 
 .login-submit-btn:active {
@@ -275,6 +279,7 @@
 
 .login-footer-links {
     display: flex;
+    align-items: center;
     gap: 20px;
 }
 
@@ -286,6 +291,84 @@
 
 .login-footer-links a:hover {
     color: #fff;
+}
+
+/* Language selector on login */
+.login-lang-wrap {
+    position: relative;
+}
+
+.login-lang-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 10px;
+    font-weight: 500;
+    font-family: var(--font-body), sans-serif;
+    cursor: pointer;
+    padding: 4px 0;
+    transition: color 0.2s;
+}
+
+.login-lang-btn:hover {
+    color: #fff;
+}
+
+.login-lang-dropdown {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    min-width: 120px;
+    background: rgba(12, 12, 12, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 4px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+    z-index: 100;
+    animation: langFadeIn 0.15s ease-out;
+}
+
+@keyframes langFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.login-lang-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 8px 12px;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--font-body), sans-serif;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.15s;
+}
+
+.login-lang-option:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+}
+
+.login-lang-option.active {
+    color: var(--accent);
+    background: rgba(200, 69, 10, 0.08);
 }
 
 /* Responsive */
@@ -308,7 +391,6 @@
 
     .login-mockup-frame {
         display: none;
-        /* Hide device on very small screens to save vertical space */
     }
 
     .login-header {

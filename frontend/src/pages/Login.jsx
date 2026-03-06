@@ -6,15 +6,24 @@ import { useAuth } from '../context/AuthContext'
 import { useTranslation } from '../context/LanguageContext'
 import './Login.css'
 
+const languages = [
+    { code: 'en', label: 'English' },
+    { code: 'hi', label: 'Hindi' },
+    { code: 'mr', label: 'Marathi' },
+    { code: 'kn', label: 'Kannada' },
+    { code: 'gu', label: 'Gujarati' },
+]
+
 export default function Login() {
     const navigate = useNavigate()
     const { login } = useAuth()
-    const { t } = useTranslation()
+    const { t, language, setLanguage } = useTranslation()
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [loading, setLoading] = useState(false)
     const [showPassword, setShowPassword] = useState(false)
     const [error, setError] = useState('')
+    const [langOpen, setLangOpen] = useState(false)
 
     const handleLogin = async (e) => {
         e.preventDefault()
@@ -117,7 +126,7 @@ export default function Login() {
                             <div className="login-logo-circle"></div>
                             <span className="login-logo-text">Sizzle</span>
                         </div>
-                        <a href="#" className="login-signup-btn">
+                        <a href="/signup" className="login-signup-btn" onClick={(e) => { e.preventDefault(); navigate('/signup') }}>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
                             </svg>
@@ -234,11 +243,34 @@ export default function Login() {
                     >
                         <div>© 2024-2026 Sizzle Inc.</div>
                         <div className="login-footer-links">
-                            <a href="#">Contact Us</a>
-                            <a href="#" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                English
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
-                            </a>
+                            <a href="/contact" onClick={(e) => { e.preventDefault(); navigate('/contact') }}>Contact Us</a>
+                            <div className="login-lang-wrap">
+                                <button
+                                    className="login-lang-btn"
+                                    onClick={() => setLangOpen(!langOpen)}
+                                >
+                                    {languages.find(l => l.code === language)?.label || 'English'}
+                                    <svg
+                                        width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                                        style={{ transform: langOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+                                    >
+                                        <polyline points="6 9 12 15 18 9" />
+                                    </svg>
+                                </button>
+                                {langOpen && (
+                                    <div className="login-lang-dropdown">
+                                        {languages.map(l => (
+                                            <button
+                                                key={l.code}
+                                                className={`login-lang-option ${l.code === language ? 'active' : ''}`}
+                                                onClick={() => { setLanguage(l.code); setLangOpen(false) }}
+                                            >
+                                                {l.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </motion.div>
                 </div>

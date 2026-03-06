@@ -1,6 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect, useRef } from 'react'
-import BlurText from '../components/BlurText'
 import TypewriterText from '../components/TypewriterText'
 import {
     motion, ScrollReveal, StaggerReveal, AnimatedNumber,
@@ -54,14 +53,14 @@ export default function Landing() {
             <section className="lp-hero">
                 {/* Left content */}
                 <div className="lp-hero-left">
-                    <BlurText
-                        text="SIZZLE"
-                        delay={150}
-                        animateBy="chars"
-                        direction="top"
-                        className="lp-hero-title"
-                        onAnimationComplete={() => setTitleLoaded(true)}
-                    />
+                    <h1 className="lp-hero-title" style={{ display: 'flex' }}>
+                        <motion.span initial={{ opacity: 0, y: -30, filter: 'blur(8px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.5, delay: 0.1 }}>S</motion.span>
+                        <motion.span initial={{ opacity: 0, y: -30, filter: 'blur(8px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.5, delay: 0.2 }}>I</motion.span>
+                        <motion.span style={{ color: 'var(--accent)' }} initial={{ opacity: 0, y: -30, filter: 'blur(8px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.5, delay: 0.3 }}>Z</motion.span>
+                        <motion.span style={{ color: 'var(--accent)' }} initial={{ opacity: 0, y: -30, filter: 'blur(8px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.5, delay: 0.4 }}>Z</motion.span>
+                        <motion.span initial={{ opacity: 0, y: -30, filter: 'blur(8px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.5, delay: 0.5 }}>L</motion.span>
+                        <motion.span initial={{ opacity: 0, y: -30, filter: 'blur(8px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: 0.5, delay: 0.6 }} onAnimationComplete={() => setTitleLoaded(true)}>E</motion.span>
+                    </h1>
 
                     <div className="lp-hero-tagline">
                         <TypewriterText
