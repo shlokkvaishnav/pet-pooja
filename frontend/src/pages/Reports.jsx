@@ -17,11 +17,14 @@ import {
 } from 'recharts'
 
 const TOOLTIP_STYLE = {
-  backgroundColor: 'var(--bg-surface)',
-  borderColor: 'var(--border-subtle)',
-  color: 'var(--text-primary)',
+  backgroundColor: 'var(--bg-overlay)',
+  border: '1px solid var(--border-strong)',
+  padding: '8px 12px',
+  color: '#FFFFFF',
   fontSize: 12,
   fontFamily: 'var(--font-body)',
+  borderRadius: 8,
+  boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
 }
 
 function formatShortDate(value) {
@@ -196,7 +199,7 @@ export default function Reports() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                   <XAxis dataKey="date_label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => formatRupees(v)} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} formatter={(v) => formatRupees(v)} />
                   <Area type="monotone" dataKey="revenue_solid" stroke="var(--accent)" fill="url(#revFill)" strokeWidth={2} connectNulls />
                   <Line type="monotone" dataKey="revenue_live" stroke="var(--accent)" strokeDasharray="6 4" strokeWidth={2} dot={{ r: 4 }} connectNulls />
                 </AreaChart>
@@ -219,7 +222,7 @@ export default function Reports() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                   <XAxis dataKey="date_label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} />
                   <Bar dataKey="orders" fill="var(--info)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>

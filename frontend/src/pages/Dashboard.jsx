@@ -10,6 +10,7 @@ import {
   getOpsReports,
   getOpsInventory,
 } from '../api/client'
+import InfoTooltip from '../components/InfoTooltip'
 import {
   ResponsiveContainer,
   LineChart,
@@ -27,12 +28,14 @@ import { formatRupees, formatRupeesShort, formatPct } from '../utils/format'
 import { buildPriceOpportunities, buildUpsellCandidates } from '../utils/revenueInsights'
 
 const CHART_TOOLTIP = {
-  backgroundColor: 'var(--bg-surface)',
-  borderColor: 'var(--border-subtle)',
-  color: 'var(--text-primary)',
+  backgroundColor: 'var(--bg-overlay)',
+  border: '1px solid var(--border-strong)',
+  padding: '8px 12px',
+  color: '#FFFFFF',
   borderRadius: 8,
   fontSize: 12,
   fontFamily: 'var(--font-body)',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
 }
 
 function pctChange(previous, current) {
@@ -75,16 +78,17 @@ function Sparkline({ data, color }) {
 export default function Dashboard() {
   const navigate = useNavigate()
   const [metrics, setMetrics] = useState(null)
-  const [reports, setReports] = useState(null)
   const [trends, setTrends] = useState(null)
-  const [menuMatrixItems, setMenuMatrixItems] = useState([])
-  const [priceRecommendations, setPriceRecommendations] = useState([])
+  const [reports, setReports] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [secondaryLoaded, setSecondaryLoaded] = useState(false)
   const [hiddenStars, setHiddenStars] = useState([])
   const [riskItems, setRiskItems] = useState([])
   const [lowStock, setLowStock] = useState([])
-  const [secondaryLoaded, setSecondaryLoaded] = useState(false)
+  const [menuMatrixItems, setMenuMatrixItems] = useState([])
+  const [priceRecommendations, setPriceRecommendations] = useState([])
   const [secondaryErrors, setSecondaryErrors] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [selectedChip, setSelectedChip] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -191,9 +195,8 @@ export default function Dashboard() {
   }
 
   const topItemsByRevenue = [...(trends?.item_trends || [])]
-    .sort((a, b) => (b.revenue_last_30d || 0) - (a.revenue_last_30d || 0))
-    .slice(0, 8)
-    .reverse()
+    .sort((a, b) => (a.revenue_last_30d || 0) - (b.revenue_last_30d || 0))
+    .slice(-8)
 
   const hourlyOrders = [...(metrics.peak_hours || [])]
     .map((row) => ({ label: row.label || `${row.hour}:00`, orders: row.order_count || 0 }))
@@ -253,10 +256,26 @@ export default function Dashboard() {
         <div className="dash-kpi-chip-row">
           {kpiChips.map((chip) => {
             const tone = trendTone(chip.trend)
+            const isSelected = selectedChip === chip.title
             return (
-              <div key={chip.title} className="dash-kpi-chip">
+              <motion.div
+                key={chip.title}
+                className={`dash-kpi-chip ${isSelected ? 'dash-kpi-chip--selected' : ''}`}
+                onClick={() => setSelectedChip(isSelected ? null : chip.title)}
+                whileTap={{ scale: 0.98 }}
+                animate={isSelected ? { scale: 1.02, y: -4 } : { scale: 1, y: 0 }}
+              >
                 <div className="dash-kpi-chip-head">
-                  <span className="dash-kpi-chip-label">{chip.title}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                    <span className="dash-kpi-chip-label">{chip.title}</span>
+                    {chip.title === 'Menu Health' && (
+                      <InfoTooltip
+                        title="Menu Health Breakdown"
+                        explanation={metrics.health_score_breakdown?.explanation}
+                        components={metrics.health_score_breakdown?.components}
+                      />
+                    )}
+                  </div>
                   <span className={`dash-kpi-trend dash-kpi-trend--${tone}`}>
                     {chip.trend > 0 ? '+' : ''}{chip.trend}%
                   </span>
@@ -265,7 +284,7 @@ export default function Dashboard() {
                 <div className="dash-kpi-sparkline">
                   <Sparkline data={chip.sparkline} color={tone === 'up' ? '#2A7A50' : tone === 'down' ? '#8C2A2A' : '#9E9AAF'} />
                 </div>
-              </div>
+              </motion.div>
             )
           })}
         </div>
@@ -280,16 +299,24 @@ export default function Dashboard() {
       )}
 
       <section className="dash-alert-strip" aria-label="AI insight alerts">
-        {alertChips.map((chip) => (
-          <div
-            key={chip.label}
-            className={`dash-alert-chip dash-alert-chip--${chip.tone}`}
-            style={{ cursor: 'pointer' }}
-            onClick={() => document.getElementById(chip.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-          >
-            {chip.label}
-          </div>
-        ))}
+        {alertChips.map((chip) => {
+          const isSelected = selectedChip === chip.target
+          return (
+            <motion.div
+              key={chip.label}
+              className={`dash-alert-chip dash-alert-chip--${chip.tone} ${isSelected ? 'dash-alert-chip--selected' : ''}`}
+              style={{ cursor: 'pointer' }}
+              onClick={() => {
+                setSelectedChip(isSelected ? null : chip.target)
+                document.getElementById(chip.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }}
+              animate={isSelected ? { scale: 1.05 } : { scale: 1 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              {chip.label}
+            </motion.div>
+          )
+        })}
       </section>
 
       <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
@@ -311,7 +338,7 @@ export default function Dashboard() {
                     <div className="card-body">
                       <div style={{ fontWeight: 700, marginBottom: 6 }}>{item.name}</div>
                       <div style={{ color: 'var(--success)', fontWeight: 700, marginBottom: 8 }}>
-                        CM {formatPct(item.cm_percent)}
+                        Contribution Margin {formatPct(item.cm_percent)}
                       </div>
                       <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
                         {item.reason}
@@ -369,7 +396,7 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                 <XAxis dataKey="day" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                 <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} tickFormatter={(v) => formatRupeesShort(v)} />
-                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} />
+                <Tooltip contentStyle={CHART_TOOLTIP} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} formatter={(value) => formatRupees(value)} />
                 <Line type="monotone" dataKey="value" stroke="#E85D2A" strokeWidth={2.5} dot={false} />
               </LineChart>
             </ResponsiveContainer>
@@ -377,37 +404,17 @@ export default function Dashboard() {
         </div>
 
         <div className="card">
-          <div className="card-header">Top Menu Items by Revenue</div>
-          <div className="card-body">
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={topItemsByRevenue} layout="vertical" margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
-                <XAxis type="number" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} tickFormatter={(v) => formatRupeesShort(v)} />
-                <YAxis dataKey="name" type="category" width={120} tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} cursor={false} />
-                <Bar dataKey="revenue_last_30d" radius={[0, 6, 6, 0]}>
-                  {topItemsByRevenue.map((_, index) => (
-                    <Cell key={index} fill={barColorByRank(index, topItemsByRevenue.length)} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
-        <div className="card">
           <div className="card-header">Orders by Hour</div>
           <div className="card-body">
             {hourlyOrders.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No hourly order data available.</div>
             ) : (
-              <ResponsiveContainer width="100%" height={250}>
+              <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={hourlyOrders} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={CHART_TOOLTIP} cursor={false} formatter={(value) => [`${value} orders`, 'Orders']} labelFormatter={() => ''} />
-                  <Bar dataKey="orders" radius={[6, 6, 0, 0]}>
+                  <Tooltip contentStyle={CHART_TOOLTIP} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} cursor={false} formatter={(value) => [`${value} orders`, 'Orders']} labelFormatter={() => ''} />
+                  <Bar dataKey="orders" radius={[6, 6, 0, 0]} background={{ fill: 'rgba(255, 255, 255, 0.05)', radius: [6, 6, 0, 0] }}>
                     {hourlyOrders.map((_, index) => (
                       <Cell key={index} fill={barColorByRank(index, hourlyOrders.length)} />
                     ))}
@@ -415,6 +422,26 @@ export default function Dashboard() {
                 </BarChart>
               </ResponsiveContainer>
             )}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card">
+          <div className="card-header">Top Menu Items by Revenue</div>
+          <div className="card-body">
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={topItemsByRevenue} layout="vertical" margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
+                <XAxis type="number" hide />
+                <YAxis dataKey="name" type="category" width={120} tick={{ fill: 'var(--text-primary)', fontSize: 11, fontWeight: 500 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={CHART_TOOLTIP} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} formatter={(value) => formatRupees(value)} cursor={{ fill: 'var(--bg-overlay)' }} />
+                <Bar dataKey="revenue_last_30d" radius={[0, 6, 6, 0]} background={{ fill: 'rgba(255, 255, 255, 0.05)', radius: [0, 6, 6, 0] }}>
+                  {topItemsByRevenue.map((_, index) => (
+                    <Cell key={index} fill={barColorByRank(index, topItemsByRevenue.length)} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
 
@@ -443,6 +470,10 @@ export default function Dashboard() {
       <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
         <div className="card" id="hidden-gems">
           <div className="card-header">Hidden Gems</div>
+          <div className="dash-list-header">
+            <span>Item</span>
+            <span>CM%</span>
+          </div>
           <div className="card-body" style={{ padding: 0 }}>
             {hiddenStars.length === 0 ? (
               <div style={{ padding: 'var(--space-5)', color: 'var(--text-muted)', fontSize: 13 }}>No hidden gems found.</div>
@@ -457,6 +488,10 @@ export default function Dashboard() {
 
         <div className="card" id="underperformers">
           <div className="card-header">Underperformers</div>
+          <div className="dash-list-header">
+            <span>Item</span>
+            <span>CM%</span>
+          </div>
           <div className="card-body" style={{ padding: 0 }}>
             {riskItems.length === 0 ? (
               <div style={{ padding: 'var(--space-5)', color: 'var(--text-muted)', fontSize: 13 }}>No items at risk.</div>
