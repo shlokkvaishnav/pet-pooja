@@ -9,6 +9,7 @@ advanced analytics
 import logging
 import threading
 import time
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -61,6 +62,28 @@ def _set_cached(key: str, data):
         _cache[key] = {"data": data, "ts": time.time()}
 
 
+def _get_or_compute(key: str, compute_fn: Callable[[], Any]):
+    """
+    Return cached value when available; otherwise compute and cache.
+    If compute fails but a stale value exists, return stale data.
+    """
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
+
+    try:
+        value = compute_fn()
+        _set_cached(key, value)
+        return value
+    except Exception:
+        with _cache_lock:
+            stale = _cache.get(key)
+        if stale:
+            logger.warning("Serving stale cached value for key=%s", key)
+            return stale["data"]
+        raise
+
+
 def _get_margins_popularity(db: Session, restaurant_id: int = None) -> tuple[list[dict], list[dict]]:
     """Return margins and popularity, reusing cached values if available."""
     suffix = f"_{restaurant_id}" if restaurant_id else ""
@@ -85,19 +108,13 @@ def get_dashboard(restaurant_id: int = Query(None), db: Session = Depends(get_db
     try:
         cache_key = f"dashboard_{restaurant_id}" if restaurant_id else "dashboard"
         cached = _get_cached(cache_key)
-        if cached:
+        if cached is not None:
             return cached
 
         # Only compute what the dashboard needs (skip combos & trends for speed)
-        margins = calculate_margins(db, restaurant_id=restaurant_id)
-        popularity = calculate_popularity(db, restaurant_id=restaurant_id)
+        margins, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
         matrix = classify_menu_matrix(margins, popularity)
         hidden_stars_list = detect_hidden_stars(margins, popularity)
-
-        # Cache these for other endpoints to reuse within TTL
-        suffix = f"_{restaurant_id}" if restaurant_id else ""
-        _set_cached(f"_margins{suffix}", margins)
-        _set_cached(f"_popularity{suffix}", popularity)
 
         total_items = len(margins)
         avg_margin = (
@@ -165,7 +182,7 @@ def get_menu_matrix(restaurant_id: int = Query(None), db: Session = Depends(get_
     try:
         cache_key = f"menu_matrix_{restaurant_id}" if restaurant_id else "menu_matrix"
         cached = _get_cached(cache_key)
-        if cached:
+        if cached is not None:
             return cached
 
         margins, popularity = _get_margins_popularity(db, restaurant_id=restaurant_id)
@@ -173,7 +190,7 @@ def get_menu_matrix(restaurant_id: int = Query(None), db: Session = Depends(get_
         summary = get_quadrant_summary(matrix)
         result = {"items": matrix, "summary": summary}
 
-        _set_cached("menu_matrix", result)
+        _set_cached(cache_key, result)
         return result
     except Exception as e:
         logger.exception("Error computing menu matrix")
@@ -187,8 +204,10 @@ def get_hidden_stars(db: Session = Depends(get_db)):
     Returns: hidden star items with estimated_monthly_uplift, recommendation
     """
     try:
-        margins, popularity = _get_margins_popularity(db)
-        return {"items": detect_hidden_stars(margins, popularity)}
+        return _get_or_compute(
+            "hidden_stars",
+            lambda: {"items": detect_hidden_stars(*_get_margins_popularity(db))},
+        )
     except Exception as e:
         logger.exception("Error detecting hidden stars")
         raise HTTPException(status_code=500, detail=f"Hidden stars detection failed: {e}")
@@ -202,28 +221,31 @@ def get_risk_items(db: Session = Depends(get_db)):
     Risk = high sales volume + low contribution margin
     """
     try:
-        margins, popularity = _get_margins_popularity(db)
-        matrix = classify_menu_matrix(margins, popularity)
+        def _compute():
+            margins, popularity = _get_margins_popularity(db)
+            matrix = classify_menu_matrix(margins, popularity)
 
-        risk_items = []
-        for item in matrix:
-            cm = item.get("margin_pct", 100)
-            pop = item.get("popularity_score", 0)
+            risk_items = []
+            for item in matrix:
+                cm = item.get("margin_pct", 100)
+                pop = item.get("popularity_score", 0)
 
-            if cm < 40 and pop > 0.5:
-                risk_score = round((100 - cm) * pop, 1)
-                risk_items.append({
-                    **item,
-                    "risk_score": risk_score,
-                    "risk_level": "high" if risk_score > 60 else "medium",
-                    "recommendation": (
-                        f"High volume but only {cm:.0f}% margin. "
-                        f"Consider raising price or reducing food cost."
-                    ),
-                })
+                if cm < 40 and pop > 0.5:
+                    risk_score = round((100 - cm) * pop, 1)
+                    risk_items.append({
+                        **item,
+                        "risk_score": risk_score,
+                        "risk_level": "high" if risk_score > 60 else "medium",
+                        "recommendation": (
+                            f"High volume but only {cm:.0f}% margin. "
+                            f"Consider raising price or reducing food cost."
+                        ),
+                    })
 
-        risk_items.sort(key=lambda x: x["risk_score"], reverse=True)
-        return {"items": risk_items, "count": len(risk_items)}
+            risk_items.sort(key=lambda x: x["risk_score"], reverse=True)
+            return {"items": risk_items, "count": len(risk_items)}
+
+        return _get_or_compute("risk_items", _compute)
     except Exception as e:
         logger.exception("Error computing risk items")
         raise HTTPException(status_code=500, detail=f"Risk analysis failed: {e}")
@@ -231,6 +253,8 @@ def get_risk_items(db: Session = Depends(get_db)):
 
 @router.get("/combos")
 def get_combo_suggestions(
+    force_retrain: bool = Query(False),
+    discount_pct: float = Query(10.0, ge=1.0, le=30.0),
     db: Session = Depends(get_db),
 ):
     """
@@ -240,6 +264,10 @@ def get_combo_suggestions(
     Always fast — never blocks on FP-Growth.
     """
     try:
+        if force_retrain:
+            # Keep GET endpoint backward compatible while allowing explicit refresh from UI.
+            from database import SessionLocal
+            run_combo_training_background(SessionLocal)
         combos = fetch_combos_from_db(db)
         return {"combos": combos}
     except Exception as e:
@@ -273,8 +301,10 @@ def get_price_recommendations(db: Session = Depends(get_db)):
     Returns: items with current_price, recommended_price, reason
     """
     try:
-        margins, popularity = _get_margins_popularity(db)
-        return {"recommendations": generate_price_recommendations(margins, popularity)}
+        return _get_or_compute(
+            "price_recommendations",
+            lambda: {"recommendations": generate_price_recommendations(*_get_margins_popularity(db))},
+        )
     except Exception as e:
         logger.exception("Error generating price recommendations")
         raise HTTPException(status_code=500, detail=f"Price recommendation failed: {e}")
@@ -287,43 +317,46 @@ def get_category_breakdown(db: Session = Depends(get_db)):
     Returns: per-category stats (item_count, avg_cm_pct, total_revenue)
     """
     try:
-        # Single query: aggregate revenue and units per category
-        cat_stats = (
-            db.query(
-                Category.id,
-                Category.name,
-                Category.name_hi,
-                func.count(func.distinct(MenuItem.id)).label("item_count"),
-                func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
-                func.coalesce(func.sum(SaleTransaction.quantity), 0).label("total_units"),
-                func.avg(MenuItem.selling_price - MenuItem.food_cost).label("avg_cm"),
-                func.avg(MenuItem.selling_price).label("avg_price"),
+        def _compute():
+            # Single query: aggregate revenue and units per category
+            cat_stats = (
+                db.query(
+                    Category.id,
+                    Category.name,
+                    Category.name_hi,
+                    func.count(func.distinct(MenuItem.id)).label("item_count"),
+                    func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
+                    func.coalesce(func.sum(SaleTransaction.quantity), 0).label("total_units"),
+                    func.avg(MenuItem.selling_price - MenuItem.food_cost).label("avg_cm"),
+                    func.avg(MenuItem.selling_price).label("avg_price"),
+                )
+                .join(MenuItem, MenuItem.category_id == Category.id)
+                .outerjoin(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
+                .filter(Category.is_active == True, MenuItem.is_available == True)
+                .group_by(Category.id, Category.name, Category.name_hi)
+                .all()
             )
-            .join(MenuItem, MenuItem.category_id == Category.id)
-            .outerjoin(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-            .filter(Category.is_active == True, MenuItem.is_available == True)
-            .group_by(Category.id, Category.name, Category.name_hi)
-            .all()
-        )
 
-        breakdown = []
-        for row in cat_stats:
-            avg_price = row.avg_price or 1
-            avg_cm = row.avg_cm or 0
-            avg_cm_pct = (avg_cm / avg_price * 100) if avg_price > 0 else 0
+            breakdown = []
+            for row in cat_stats:
+                avg_price = row.avg_price or 1
+                avg_cm = row.avg_cm or 0
+                avg_cm_pct = (avg_cm / avg_price * 100) if avg_price > 0 else 0
 
-            breakdown.append({
-                "category_id": row.id,
-                "category_name": row.name,
-                "category_name_hi": row.name_hi or "",
-                "item_count": row.item_count,
-                "total_revenue": round(float(row.total_revenue), 2),
-                "total_units_sold": int(row.total_units),
-                "avg_cm_pct": round(float(avg_cm_pct), 1),
-            })
+                breakdown.append({
+                    "category_id": row.id,
+                    "category_name": row.name,
+                    "category_name_hi": row.name_hi or "",
+                    "item_count": row.item_count,
+                    "total_revenue": round(float(row.total_revenue), 2),
+                    "total_units_sold": int(row.total_units),
+                    "avg_cm_pct": round(float(avg_cm_pct), 1),
+                })
 
-        breakdown.sort(key=lambda x: x["total_revenue"], reverse=True)
-        return {"categories": breakdown}
+            breakdown.sort(key=lambda x: x["total_revenue"], reverse=True)
+            return {"categories": breakdown}
+
+        return _get_or_compute("category_breakdown", _compute)
     except Exception as e:
         logger.exception("Error computing category breakdown")
         raise HTTPException(status_code=500, detail=f"Category breakdown failed: {e}")
@@ -373,13 +406,7 @@ def get_trends(db: Session = Depends(get_db)):
     Returns: item_trends (30/60/90 day), category_trends, seasonal_patterns, quadrant_drift
     """
     try:
-        cached = _get_cached("trends")
-        if cached:
-            return cached
-
-        result = calculate_trends(db)
-        _set_cached("trends", result)
-        return result
+        return _get_or_compute("trends", lambda: calculate_trends(db))
     except Exception as e:
         logger.exception("Error computing trends")
         raise HTTPException(status_code=500, detail=f"Trend analysis failed: {e}")
@@ -392,7 +419,7 @@ def get_wow_mom(db: Session = Depends(get_db)):
     Returns: per-item week-over-week and month-over-month revenue changes
     """
     try:
-        return {"items": calculate_wow_mom(db)}
+        return _get_or_compute("wow_mom", lambda: {"items": calculate_wow_mom(db)})
     except Exception as e:
         logger.exception("Error computing WoW/MoM")
         raise HTTPException(status_code=500, detail=f"WoW/MoM analysis failed: {e}")
@@ -405,7 +432,7 @@ def get_price_elasticity(db: Session = Depends(get_db)):
     Returns: items where price changes were detected with elasticity estimates
     """
     try:
-        return {"items": estimate_price_elasticity(db)}
+        return _get_or_compute("price_elasticity", lambda: {"items": estimate_price_elasticity(db)})
     except Exception as e:
         logger.exception("Error estimating price elasticity")
         raise HTTPException(status_code=500, detail=f"Price elasticity failed: {e}")
@@ -423,7 +450,8 @@ def get_cannibalization(
     Returns: items where new additions are cannibalizing existing items
     """
     try:
-        return {"items": analyze_category_cannibalization(db, lookback_days=days)}
+        cache_key = f"cannibalization_{days}"
+        return _get_or_compute(cache_key, lambda: {"items": analyze_category_cannibalization(db, lookback_days=days)})
     except Exception as e:
         logger.exception("Error analyzing cannibalization")
         raise HTTPException(status_code=500, detail=f"Cannibalization analysis failed: {e}")
@@ -436,7 +464,7 @@ def get_price_sensitivity(db: Session = Depends(get_db)):
     Returns: plowhorse items with price increase scenarios and projected impact
     """
     try:
-        return {"items": estimate_price_sensitivity(db)}
+        return _get_or_compute("price_sensitivity", lambda: {"items": estimate_price_sensitivity(db)})
     except Exception as e:
         logger.exception("Error estimating price sensitivity")
         raise HTTPException(status_code=500, detail=f"Price sensitivity failed: {e}")
@@ -452,7 +480,8 @@ def get_waste_analysis(
     Returns: waste costs, void rates, top wasted ingredients, top voided items
     """
     try:
-        return analyze_waste_and_voids(db, days=days)
+        cache_key = f"waste_{days}"
+        return _get_or_compute(cache_key, lambda: analyze_waste_and_voids(db, days=days))
     except Exception as e:
         logger.exception("Error analyzing waste")
         raise HTTPException(status_code=500, detail=f"Waste analysis failed: {e}")
@@ -468,7 +497,8 @@ def get_customer_returns(
     Returns: estimated repeat customer rates based on table patterns
     """
     try:
-        return estimate_customer_return_rate(db, days=days)
+        cache_key = f"customer_returns_{days}"
+        return _get_or_compute(cache_key, lambda: estimate_customer_return_rate(db, days=days))
     except Exception as e:
         logger.exception("Error estimating customer returns")
         raise HTTPException(status_code=500, detail=f"Customer return analysis failed: {e}")
@@ -481,7 +511,7 @@ def get_menu_complexity(db: Session = Depends(get_db)):
     Returns: per-category complexity scores and alerts when >7 items
     """
     try:
-        return {"categories": calculate_menu_complexity(db)}
+        return _get_or_compute("menu_complexity", lambda: {"categories": calculate_menu_complexity(db)})
     except Exception as e:
         logger.exception("Error computing menu complexity")
         raise HTTPException(status_code=500, detail=f"Menu complexity failed: {e}")
@@ -497,7 +527,8 @@ def get_operational_metrics(
     Returns: AOV, peak hours, orders by type, total stats
     """
     try:
-        return calculate_operational_metrics(db, days=days)
+        cache_key = f"operational_{days}"
+        return _get_or_compute(cache_key, lambda: calculate_operational_metrics(db, days=days))
     except Exception as e:
         logger.exception("Error computing operational metrics")
         raise HTTPException(status_code=500, detail=f"Operational metrics failed: {e}")

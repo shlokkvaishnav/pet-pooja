@@ -218,9 +218,7 @@ async def process_text(
 # ── 3b. POST /api/voice/speak ──
 
 @router.post("/speak")
-@_limiter.limit("30/minute")
 async def speak_text(
-    request: Request,
     body: SpeakInput,
 ):
     """

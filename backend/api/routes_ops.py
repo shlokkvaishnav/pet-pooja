@@ -68,6 +68,8 @@ def get_orders(
     try:
         sd = _parse_date(start_date)
         ed = _parse_date(end_date)
+        if sd and ed and sd > ed:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date.")
 
         if sd or ed:
             start_dt = datetime.combine(sd or date.min, datetime.min.time(), tzinfo=timezone.utc)
