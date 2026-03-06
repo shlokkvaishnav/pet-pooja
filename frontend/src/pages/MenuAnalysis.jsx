@@ -115,6 +115,48 @@ export default function MenuAnalysis() {
     totalOrders,
   }), [data, combos, priceApi, totalOrders])
 
+  // --- Profitability tab data ---
+  const marginTiers = useMemo(() => {
+    const allItems = data?.items || []
+    const high = allItems.filter((i) => (i.margin_pct || i.cm_percent || 0) >= 65).length
+    const medium = allItems.filter((i) => { const m = i.margin_pct || i.cm_percent || 0; return m >= 50 && m < 65 }).length
+    const low = allItems.filter((i) => (i.margin_pct || i.cm_percent || 0) < 50).length
+    return [
+      { tier: 'High (≥65%)', count: high, color: 'var(--success)' },
+      { tier: 'Medium (50–65%)', count: medium, color: 'var(--warning)' },
+      { tier: 'Low (<50%)', count: low, color: 'var(--danger)' },
+    ]
+  }, [data])
+
+  const categoryMargins = useMemo(() => {
+    const allItems = data?.items || []
+    const catMap = new Map()
+    for (const item of allItems) {
+      const cat = item.category || 'Uncategorized'
+      const entry = catMap.get(cat) || { category: cat, totalMargin: 0, totalRevenue: 0, count: 0 }
+      entry.totalMargin += (item.margin_pct || item.cm_percent || 0)
+      entry.totalRevenue += (item.revenue_30d || item.total_revenue || 0)
+      entry.count += 1
+      catMap.set(cat, entry)
+    }
+    return [...catMap.values()]
+      .map((c) => ({ ...c, avgMargin: c.count > 0 ? c.totalMargin / c.count : 0 }))
+      .sort((a, b) => b.avgMargin - a.avgMargin)
+  }, [data])
+
+  // --- Velocity tab data ---
+  const popularityTiers = useMemo(() => {
+    const allItems = data?.items || []
+    const high = allItems.filter((i) => (i.popularity_score || 0) >= 0.6).length
+    const medium = allItems.filter((i) => { const p = i.popularity_score || 0; return p >= 0.3 && p < 0.6 }).length
+    const low = allItems.filter((i) => (i.popularity_score || 0) < 0.3).length
+    return [
+      { tier: 'High (≥0.6)', count: high, color: 'var(--success)' },
+      { tier: 'Medium (0.3–0.6)', count: medium, color: 'var(--warning)' },
+      { tier: 'Low (<0.3)', count: low, color: 'var(--danger)' },
+    ]
+  }, [data])
+
   if (loading) {
     return (
       <div className="app-page">
@@ -162,52 +204,9 @@ export default function MenuAnalysis() {
     driftByQuadrant[drift.current_quadrant] = (driftByQuadrant[drift.current_quadrant] || 0) + 1
   }
 
-  // --- Profitability tab data ---
-  const marginTiers = useMemo(() => {
-    const high = items.filter((i) => (i.margin_pct || i.cm_percent || 0) >= 65).length
-    const medium = items.filter((i) => { const m = i.margin_pct || i.cm_percent || 0; return m >= 50 && m < 65 }).length
-    const low = items.filter((i) => (i.margin_pct || i.cm_percent || 0) < 50).length
-    return [
-      { tier: 'High (≥65%)', count: high, color: 'var(--success)' },
-      { tier: 'Medium (50–65%)', count: medium, color: 'var(--warning)' },
-      { tier: 'Low (<50%)', count: low, color: 'var(--danger)' },
-    ]
-  }, [items])
+  const itemsByMargin = [...enrichedItems].sort((a, b) => (b.margin_pct || b.cm_percent || 0) - (a.margin_pct || a.cm_percent || 0))
 
-  const categoryMargins = useMemo(() => {
-    const catMap = new Map()
-    for (const item of items) {
-      const cat = item.category || 'Uncategorized'
-      const entry = catMap.get(cat) || { category: cat, totalMargin: 0, totalRevenue: 0, count: 0 }
-      entry.totalMargin += (item.margin_pct || item.cm_percent || 0)
-      entry.totalRevenue += (item.revenue_30d || item.total_revenue || 0)
-      entry.count += 1
-      catMap.set(cat, entry)
-    }
-    return [...catMap.values()]
-      .map((c) => ({ ...c, avgMargin: c.count > 0 ? c.totalMargin / c.count : 0 }))
-      .sort((a, b) => b.avgMargin - a.avgMargin)
-  }, [items])
-
-  const itemsByMargin = useMemo(() =>
-    [...enrichedItems].sort((a, b) => (b.margin_pct || b.cm_percent || 0) - (a.margin_pct || a.cm_percent || 0)),
-  [enrichedItems])
-
-  // --- Velocity tab data ---
-  const popularityTiers = useMemo(() => {
-    const high = items.filter((i) => (i.popularity_score || 0) >= 0.6).length
-    const medium = items.filter((i) => { const p = i.popularity_score || 0; return p >= 0.3 && p < 0.6 }).length
-    const low = items.filter((i) => (i.popularity_score || 0) < 0.3).length
-    return [
-      { tier: 'High (≥0.6)', count: high, color: 'var(--success)' },
-      { tier: 'Medium (0.3–0.6)', count: medium, color: 'var(--warning)' },
-      { tier: 'Low (<0.3)', count: low, color: 'var(--danger)' },
-    ]
-  }, [items])
-
-  const itemsByVelocity = useMemo(() =>
-    [...enrichedItems].sort((a, b) => (b.popularity_score || 0) - (a.popularity_score || 0)),
-  [enrichedItems])
+  const itemsByVelocity = [...enrichedItems].sort((a, b) => (b.popularity_score || 0) - (a.popularity_score || 0))
 
   const CHART_TOOLTIP = {
     backgroundColor: 'var(--bg-overlay)',
