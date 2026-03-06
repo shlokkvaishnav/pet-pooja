@@ -265,8 +265,8 @@ export default function MenuAnalysis() {
                       {categoryTrends.map((row, index) => (
                         <tr key={index}>
                           <td style={{ fontWeight: 600 }}>{row.category_name}</td>
-                          <td className="col-number">INR {(row.revenue_last_30d || 0).toLocaleString('en-IN')}</td>
-                          <td className="col-number">INR {(row.revenue_prev_30d || 0).toLocaleString('en-IN')}</td>
+                          <td className="col-number">₹{(row.revenue_last_30d || 0).toLocaleString('en-IN')}</td>
+                          <td className="col-number">₹{(row.revenue_prev_30d || 0).toLocaleString('en-IN')}</td>
                           <td className="col-number" style={{ fontWeight: 700, color: row.trend_pct > 0 ? 'var(--success)' : row.trend_pct < 0 ? 'var(--danger)' : 'var(--text-muted)' }}>
                             {row.trend_arrow} {row.trend_pct > 0 ? '+' : ''}{row.trend_pct}%
                           </td>
@@ -317,7 +317,7 @@ export default function MenuAnalysis() {
                   {priceInsight.opportunities.map((row) => (
                     <tr key={row.id}>
                       <td style={{ fontWeight: 600 }}>{row.item_name}</td>
-                      <td className="col-number">Rs {Number(row.current_price || 0).toLocaleString('en-IN')}</td>
+                      <td className="col-number">₹{Number(row.current_price || 0).toLocaleString('en-IN')}</td>
                       <td>{row.suggested_action}</td>
                       <td className="col-number" style={{ color: String(row.expected_cm_impact).includes('+') ? 'var(--success)' : 'var(--text-secondary)' }}>{row.expected_cm_impact}</td>
                       <td className="col-number" style={{ color: String(row.expected_volume_impact).includes('+') ? 'var(--success)' : 'var(--text-secondary)' }}>{row.expected_volume_impact}</td>

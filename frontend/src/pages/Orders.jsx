@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { cancelOpsOrder, createOpsOrder, getOpsOrder, getOpsOrders, updateOpsOrder } from '../api/client'
+import { cancelOpsOrder, getOpsOrder, getOpsOrders, updateOpsOrder } from '../api/client'
 import { formatRupees, formatRupeesShort } from '../utils/format'
 import { motion, AnimatePresence } from 'motion/react'
 import { ORDERS_PAGE_LIMIT } from '../config'
@@ -34,9 +34,6 @@ export default function Orders() {
   const [orderPreview, setOrderPreview] = useState(null)
   const [sortBy, setSortBy] = useState('created_at')
   const [sortDir, setSortDir] = useState('desc')
-  const [showNewOrderModal, setShowNewOrderModal] = useState(false)
-  const [newOrderTable, setNewOrderTable] = useState('')
-  const [newOrderType, setNewOrderType] = useState('dine_in')
   const [editModal, setEditModal] = useState(null)
   const [editTable, setEditTable] = useState('')
   const [editAmount, setEditAmount] = useState('')
@@ -63,39 +60,6 @@ export default function Orders() {
   const refreshOrders = () => getOpsOrders({ ...params, _t: Date.now() }).then(setData)
 
   useEffect(() => {
-    setLoading(true)
-    setError('')
-    getOpsOrders(params)
-      .then(setData)
-      .catch((err) => setError(err?.detail || err?.message || 'Failed to load orders'))
-      .finally(() => setLoading(false))
-  }, [params])
-
-  const handleCreateOrder = async () => {
-    setBusyOrderId('create')
-    setNotice('')
-    setError('')
-    try {
-      await createOpsOrder({
-        source: 'manual',
-        order_type: newOrderType,
-        status: 'building',
-        total_amount: 0,
-        table_number: newOrderTable.trim() || null,
-      })
-      setShowNewOrderModal(false)
-      setNewOrderTable('')
-      setNewOrderType('dine_in')
-      await refreshOrders()
-      setNotice('Manual order created successfully.')
-    } catch (err) {
-      setError(err?.detail || err?.message || 'Could not create order')
-    } finally {
-      setBusyOrderId('')
-    }
-  }
-
-  const handleViewOrder = async (orderId) => {
     setBusyOrderId(orderId)
     setError('')
     try {
@@ -240,9 +204,6 @@ export default function Orders() {
           <p className="app-hero-sub">Live order flow and status monitoring.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <button className="btn btn-primary" onClick={() => setShowNewOrderModal(true)} disabled={busyOrderId === 'create'}>
-            + New Order
-          </button>
           <button className="btn btn-ghost" onClick={() => navigate('/dashboard/voice-order')}>
             Voice Order
           </button>
@@ -405,50 +366,6 @@ export default function Orders() {
       </div>
 
       <AnimatePresence>
-        {showNewOrderModal && (
-          <div className="inventory-modal-backdrop" onClick={() => setShowNewOrderModal(false)}>
-            <motion.div
-              className="inventory-modal"
-              initial={{ opacity: 0, scale: 0.95, y: 16 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 16 }}
-              transition={{ duration: 0.2 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>New Order</span>
-                <button className="btn btn-ghost" onClick={() => setShowNewOrderModal(false)}>Close</button>
-              </div>
-              <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0 }}>Create a new manual order. You can assign a table and order type.</p>
-                <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  Order Type
-                  <select className="input" value={newOrderType} onChange={(e) => setNewOrderType(e.target.value)}>
-                    <option value="dine_in">Dine In</option>
-                    <option value="takeaway">Takeaway</option>
-                    <option value="delivery">Delivery</option>
-                  </select>
-                </label>
-                <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  Table Number (optional)
-                  <input
-                    className="input"
-                    placeholder="e.g. T1"
-                    value={newOrderTable}
-                    onChange={(e) => setNewOrderTable(e.target.value)}
-                  />
-                </label>
-                <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
-                  <button className="btn btn-ghost" onClick={() => setShowNewOrderModal(false)}>Cancel</button>
-                  <button className="btn btn-primary" onClick={handleCreateOrder} disabled={busyOrderId === 'create'}>
-                    {busyOrderId === 'create' ? 'Creating...' : 'Create Order'}
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
         {editModal && (
           <div className="inventory-modal-backdrop" onClick={() => setEditModal(null)}>
             <motion.div

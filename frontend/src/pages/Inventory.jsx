@@ -10,6 +10,17 @@ function formatDelta(current, previous) {
   return `${prefix}${formatRupees(Math.abs(delta))}`
 }
 
+function StockBar({ current, reorder }) {
+  const ratio = reorder > 0 ? Math.min(current / reorder, 2) : 1
+  const pct = Math.min(ratio * 50, 100)
+  const color = ratio <= 1 ? 'var(--danger)' : ratio <= 1.5 ? 'var(--warning)' : 'var(--success)'
+  return (
+    <div style={{ width: '100%', height: 4, borderRadius: 2, background: 'var(--bg-overlay)' }}>
+      <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: color, transition: 'width 0.4s' }} />
+    </div>
+  )
+}
+
 export default function Inventory() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -158,79 +169,96 @@ export default function Inventory() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-header">All Ingredients</div>
-        <div className="card-body">
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Ingredient</th>
-                  <th>Unit</th>
-                  <th>Current</th>
-                  <th>Reorder</th>
-                  <th>Cost / Unit</th>
-                  <th>Update</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ingredients.map((i) => (
-                  <tr key={i.ingredient_id}>
-                    <td style={{ fontWeight: 600 }}>{i.name}</td>
-                    <td>{i.unit}</td>
-                    <td>{i.current_stock}</td>
-                    <td>
-                      <input
-                        className="input input-sm"
-                        type="number"
-                        step="0.01"
-                        value={updates[i.ingredient_id]?.reorder_level ?? i.reorder_level}
-                        onChange={(e) => setUpdates((prev) => ({
-                          ...prev,
-                          [i.ingredient_id]: {
-                            ...prev[i.ingredient_id],
-                            reorder_level: e.target.value,
-                          },
-                        }))}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        className="input input-sm"
-                        type="number"
-                        step="0.01"
-                        value={updates[i.ingredient_id]?.cost_per_unit ?? i.cost_per_unit}
-                        onChange={(e) => setUpdates((prev) => ({
-                          ...prev,
-                          [i.ingredient_id]: {
-                            ...prev[i.ingredient_id],
-                            cost_per_unit: e.target.value,
-                          },
-                        }))}
-                      />
-                    </td>
-                    <td>
-                      <button
-                        className="btn btn-ghost"
-                        onClick={() => updateIngredient(i.ingredient_id, {
-                          reorder_level: updates[i.ingredient_id]?.reorder_level !== undefined ? Number(updates[i.ingredient_id].reorder_level) : undefined,
-                          cost_per_unit: updates[i.ingredient_id]?.cost_per_unit !== undefined ? Number(updates[i.ingredient_id].cost_per_unit) : undefined,
-                        }).then(() => getOpsInventoryFiltered(params).then(setData))}
-                      >
-                        Save
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {(() => {
+        const grouped = {}
+        ingredients.forEach((i) => {
+          const cat = i.category || 'Other'
+          if (!grouped[cat]) grouped[cat] = []
+          grouped[cat].push(i)
+        })
+        const sortedGroups = Object.keys(grouped).sort((a, b) => a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b))
+
+        return sortedGroups.map((cat) => (
+          <div className="card" key={cat} style={{ marginBottom: 'var(--space-4)' }}>
+            <div className="card-header">{cat}</div>
+            <div className="card-body">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 'var(--space-3)' }}>
+                {grouped[cat].map((i) => {
+                  const isLow = i.current_stock <= i.reorder_level
+                  return (
+                    <div
+                      key={i.ingredient_id}
+                      style={{
+                        border: `1px solid ${isLow ? 'var(--danger)' : 'var(--border-subtle)'}`,
+                        borderRadius: 'var(--radius-lg)',
+                        padding: 'var(--space-4)',
+                        background: isLow ? 'rgba(140,42,42,0.06)' : 'var(--bg-surface)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 700, fontSize: 13 }}>{i.name}</span>
+                        {isLow && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--danger)', textTransform: 'uppercase' }}>Low</span>}
+                      </div>
+                      <StockBar current={i.current_stock} reorder={i.reorder_level} />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)' }}>
+                        <span>{i.current_stock} {i.unit}</span>
+                        <span>Reorder: {i.reorder_level}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        Cost: {formatRupees(i.cost_per_unit)}/{i.unit}
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          step="0.01"
+                          placeholder="Reorder"
+                          style={{ flex: 1, fontSize: 11 }}
+                          value={updates[i.ingredient_id]?.reorder_level ?? ''}
+                          onChange={(e) => setUpdates((prev) => ({
+                            ...prev,
+                            [i.ingredient_id]: { ...prev[i.ingredient_id], reorder_level: e.target.value },
+                          }))}
+                        />
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          step="0.01"
+                          placeholder="Cost"
+                          style={{ flex: 1, fontSize: 11 }}
+                          value={updates[i.ingredient_id]?.cost_per_unit ?? ''}
+                          onChange={(e) => setUpdates((prev) => ({
+                            ...prev,
+                            [i.ingredient_id]: { ...prev[i.ingredient_id], cost_per_unit: e.target.value },
+                          }))}
+                        />
+                        <button
+                          className="btn btn-ghost"
+                          style={{ fontSize: 11, padding: '4px 8px' }}
+                          onClick={() => updateIngredient(i.ingredient_id, {
+                            reorder_level: updates[i.ingredient_id]?.reorder_level !== undefined ? Number(updates[i.ingredient_id].reorder_level) : undefined,
+                            cost_per_unit: updates[i.ingredient_id]?.cost_per_unit !== undefined ? Number(updates[i.ingredient_id].cost_per_unit) : undefined,
+                          }).then(() => getOpsInventoryFiltered(params).then(setData))}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           </div>
-          <div className="pagination">
-            <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
-            <div className="pagination-label">Page {page} of {totalPages}</div>
-            <button className="btn btn-ghost" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
-          </div>
-        </div>
+        ))
+      })()}
+
+      <div className="pagination">
+        <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
+        <div className="pagination-label">Page {page} of {totalPages}</div>
+        <button className="btn btn-ghost" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
       </div>
 
       {showMovementModal ? (

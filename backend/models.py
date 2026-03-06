@@ -250,6 +250,7 @@ class Ingredient(Base):
     id = Column(Integer, primary_key=True, index=True)
     restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
     name = Column(String(150), nullable=False)
+    category = Column(String(50), nullable=True, default="Other")
     unit = Column(String(20), nullable=False, default="g")  # g | kg | ml | L | pcs
     current_stock = Column(Float, nullable=False, default=0.0)
     reorder_level = Column(Float, nullable=False, default=0.0)  # alert when stock <= this

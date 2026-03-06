@@ -148,6 +148,11 @@ export default function Dashboard() {
     [dailySeries],
   )
 
+  const todayRow = dailySeries.find((row) => row.is_today)
+  const todayRevenue = todayRow?.revenue || 0
+  const todayOrders = todayRow?.orders || 0
+  const todayAov = todayOrders > 0 ? todayRevenue / todayOrders : 0
+
   const revenueTrend = periodTrend(revenueSeries.map((point) => point.value))
   const ordersTrend = periodTrend(orderSeries.map((point) => point.value))
   const aovTrend = periodTrend(aovSeries.map((point) => point.value))
@@ -196,28 +201,28 @@ export default function Dashboard() {
   const driftItems = (trends?.quadrant_drift || []).slice(0, 5)
 
   const alertChips = [
-    { label: `${riskItems.length} underperformers`, tone: 'danger' },
-    { label: `${hiddenStars.length} hidden gems`, tone: 'success' },
-    { label: `${lowStock.length} low stock alerts`, tone: 'warning' },
-    { label: `${driftItems.length} quadrant drifts`, tone: 'info' },
+    { label: `${riskItems.length} underperformers`, tone: 'danger', target: 'underperformers' },
+    { label: `${hiddenStars.length} hidden gems`, tone: 'success', target: 'hidden-gems' },
+    { label: `${lowStock.length} low stock alerts`, tone: 'warning', target: 'low-stock' },
+    { label: `${driftItems.length} quadrant drifts`, tone: 'info', target: 'quadrant-drift' },
   ]
 
   const kpiChips = [
     {
-      title: 'Revenue (30D)',
-      value: formatRupeesShort(metrics.total_revenue || 0),
+      title: "Today's Revenue",
+      value: formatRupeesShort(todayRevenue),
       trend: revenueTrend,
       sparkline: revenueSeries,
     },
     {
-      title: 'Orders (30D)',
-      value: (metrics.total_orders || 0).toLocaleString('en-IN'),
+      title: "Today's Orders",
+      value: (todayOrders).toLocaleString('en-IN'),
       trend: ordersTrend,
       sparkline: orderSeries,
     },
     {
       title: 'Avg Order Value',
-      value: formatRupees(metrics.avg_order_value || 0),
+      value: formatRupees(todayAov),
       trend: aovTrend,
       sparkline: aovSeries,
     },
@@ -276,7 +281,12 @@ export default function Dashboard() {
 
       <section className="dash-alert-strip" aria-label="AI insight alerts">
         {alertChips.map((chip) => (
-          <div key={chip.label} className={`dash-alert-chip dash-alert-chip--${chip.tone}`}>
+          <div
+            key={chip.label}
+            className={`dash-alert-chip dash-alert-chip--${chip.tone}`}
+            style={{ cursor: 'pointer' }}
+            onClick={() => document.getElementById(chip.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          >
             {chip.label}
           </div>
         ))}
@@ -396,7 +406,7 @@ export default function Dashboard() {
                 <BarChart data={hourlyOrders} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={CHART_TOOLTIP} cursor={false} />
+                  <Tooltip contentStyle={CHART_TOOLTIP} cursor={false} formatter={(value) => [`${value} orders`, 'Orders']} />
                   <Bar dataKey="orders" radius={[6, 6, 0, 0]}>
                     {hourlyOrders.map((_, index) => (
                       <Cell key={index} fill={barColorByRank(index, hourlyOrders.length)} />
@@ -408,7 +418,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="card">
+        <div className="card" id="low-stock">
           <div className="card-header">Low Stock Alerts</div>
           <div className="card-body">
             {lowStock.length === 0 ? (
@@ -431,7 +441,7 @@ export default function Dashboard() {
       </section>
 
       <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
-        <div className="card">
+        <div className="card" id="hidden-gems">
           <div className="card-header">Hidden Gems</div>
           <div className="card-body" style={{ padding: 0 }}>
             {hiddenStars.length === 0 ? (
@@ -445,7 +455,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="card">
+        <div className="card" id="underperformers">
           <div className="card-header">Underperformers</div>
           <div className="card-body" style={{ padding: 0 }}>
             {riskItems.length === 0 ? (
@@ -460,7 +470,7 @@ export default function Dashboard() {
         </div>
       </section>
 
-      <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
+      <section className="card" id="quadrant-drift" style={{ marginBottom: 'var(--space-6)' }}>
         <div className="card-header">Quadrant Drift Alerts</div>
         <div className="card-body">
           {driftItems.length === 0 ? (

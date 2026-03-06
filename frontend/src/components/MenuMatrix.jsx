@@ -80,7 +80,7 @@ function CustomTooltip({ payload }) {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
           <span>Price</span>
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>INR {item.selling_price}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>₹{item.selling_price}</span>
         </div>
       </div>
       {item.action_recommendation && (

@@ -1136,6 +1136,7 @@ def get_inventory(
                 {
                     "ingredient_id": i.id,
                     "name": i.name,
+                    "category": i.category or "Other",
                     "unit": i.unit,
                     "current_stock": i.current_stock,
                     "reorder_level": i.reorder_level,
@@ -1147,6 +1148,7 @@ def get_inventory(
                 {
                     "ingredient_id": i.id,
                     "name": i.name,
+                    "category": i.category or "Other",
                     "unit": i.unit,
                     "current_stock": i.current_stock,
                     "reorder_level": i.reorder_level,
