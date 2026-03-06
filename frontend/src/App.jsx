@@ -8,6 +8,8 @@ import MenuAnalysis from './pages/MenuAnalysis'
 import ComboEngine from './pages/ComboEngine'
 import VoiceOrder from './pages/VoiceOrder'
 import AboutUs from './pages/AboutUs'
+import Product from './pages/Product'
+import Contact from './pages/Contact'
 
 function DashboardLayout() {
   return (
@@ -59,6 +61,8 @@ export default function App() {
             {/* Public routes */}
             <Route path="/" element={<Landing />} />
             <Route path="/about" element={<AboutUs />} />
+            <Route path="/product" element={<Product />} />
+            <Route path="/contact" element={<Contact />} />
             <Route path="/login" element={<Login />} />
 
             {/* Dashboard routes (after login) */}
