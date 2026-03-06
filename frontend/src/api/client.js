@@ -70,12 +70,13 @@ function invalidateCacheByPrefix(prefix) {
   }
 }
 
-async function requestWithRetry(fn, retries = 1) {
+async function requestWithRetry(fn, retries = 1, signal) {
   let attempt = 0
   while (true) {
     try {
       return await fn()
     } catch (error) {
+      if (signal?.aborted) throw error
       const status = error?.response?.status
       const transient = !status || TRANSIENT_STATUS.has(status)
       if (!transient || attempt >= retries) throw error
@@ -91,6 +92,7 @@ async function getWithCache(path, {
   dedupe = true,
   retries = 1,
   bypassCache = false,
+  signal,
 } = {}) {
   const sortedParams = toSortedParams(params)
   const key = makeGetKey(path, sortedParams)
@@ -105,8 +107,9 @@ async function getWithCache(path, {
   }
 
   const reqPromise = requestWithRetry(
-    () => api.get(path, { params: sortedParams }).then((r) => r.data),
+    () => api.get(path, { params: sortedParams, signal }).then((r) => r.data),
     retries,
+    signal,
   )
     .then((data) => {
       writeCache(key, data, ttlMs)
@@ -165,17 +168,17 @@ export const getRestaurantProfile = (restaurantId) =>
 export const updateRestaurantProfile = (restaurantId, payload) =>
   patch(`/auth/me/${restaurantId}`, payload)
 
-export const getDashboardMetrics = () =>
-  getWithCache('/revenue/dashboard', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+export const getDashboardMetrics = ({ signal } = {}) =>
+  getWithCache('/revenue/dashboard', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
-export const getMenuMatrix = () =>
-  getWithCache('/revenue/menu-matrix', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+export const getMenuMatrix = ({ signal } = {}) =>
+  getWithCache('/revenue/menu-matrix', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
-export const getHiddenStars = () =>
-  getWithCache('/revenue/hidden-stars', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+export const getHiddenStars = ({ signal } = {}) =>
+  getWithCache('/revenue/hidden-stars', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
-export const getRisks = () =>
-  getWithCache('/revenue/risks', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+export const getRisks = ({ signal } = {}) =>
+  getWithCache('/revenue/risks', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
 export const getCombos = (forceRetrain = false, discountPct = 10) =>
   getWithCache('/revenue/combos', {
@@ -184,14 +187,14 @@ export const getCombos = (forceRetrain = false, discountPct = 10) =>
     bypassCache: !!forceRetrain,
   })
 
-export const getPriceRecommendations = () =>
-  getWithCache('/revenue/price-recommendations', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+export const getPriceRecommendations = ({ signal } = {}) =>
+  getWithCache('/revenue/price-recommendations', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
 export const getCategoryBreakdown = () =>
   getWithCache('/revenue/category-breakdown', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
-export const getTrends = () =>
-  getWithCache('/revenue/trends', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+export const getTrends = ({ signal } = {}) =>
+  getWithCache('/revenue/trends', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
 export const getWowMom = () =>
   getWithCache('/revenue/trends/wow-mom', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
@@ -280,14 +283,14 @@ export const getOpsTables = () =>
 export const getOpsTablesFiltered = (params = {}) =>
   getWithCache('/ops/tables', { params: _params(params), ttlMs: SHORT_CACHE_TTL_MS })
 
-export const getOpsInventory = (days = 30) =>
-  getWithCache('/ops/inventory', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
+export const getOpsInventory = (days = 30, { signal } = {}) =>
+  getWithCache('/ops/inventory', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
 export const getOpsInventoryFiltered = (params = {}) =>
   getWithCache('/ops/inventory', { params: _params(params), ttlMs: SHORT_CACHE_TTL_MS })
 
-export const getOpsReports = (days = 14) =>
-  getWithCache('/ops/reports', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
+export const getOpsReports = (days = 14, { signal } = {}) =>
+  getWithCache('/ops/reports', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
 export const getOpsReportsFiltered = (params = {}) =>
   getWithCache('/ops/reports', { params: _params(params), ttlMs: SHORT_CACHE_TTL_MS })

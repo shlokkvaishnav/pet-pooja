@@ -92,13 +92,13 @@ export default function ComboCard({ combo }) {
                 </span>
               )}
               <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                ₹{parseFloat(combo.suggested_bundle_price).toFixed(0)}
+                ₹{(parseFloat(combo.suggested_bundle_price) || 0).toFixed(0)}
               </span>
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
             <span style={{ color: 'var(--text-muted)' }}>CM Gain</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--success)' }}>+₹{parseFloat(combo.cm_gain).toFixed(0)}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--success)' }}>+₹{(parseFloat(combo.cm_gain) || 0).toFixed(0)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
             <span style={{ color: 'var(--text-muted)' }}>Discount</span>

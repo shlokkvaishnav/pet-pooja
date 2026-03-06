@@ -91,38 +91,41 @@ export default function Dashboard() {
   const [selectedChip, setSelectedChip] = useState(null)
 
   useEffect(() => {
-    let active = true
+    const controller = new AbortController()
+    const { signal } = controller
 
-    Promise.all([getDashboardMetrics(), getOpsReports(30)])
+    Promise.all([getDashboardMetrics({ signal }), getOpsReports(30, { signal })])
       .then(([dashboardData, reportData]) => {
-        if (!active) return
+        if (signal.aborted) return
         setMetrics(dashboardData)
         setReports(reportData)
       })
       .catch((error) => {
+        if (signal.aborted) return
         console.error('Dashboard load failed:', error)
       })
       .finally(() => {
-        if (active) setLoading(false)
+        if (!signal.aborted) setLoading(false)
       })
 
     const errors = []
     const loadSafe = (label, promise, fallback) =>
       promise.catch((error) => {
+        if (signal.aborted) return fallback
         errors.push(label)
         console.error(`${label} load failed:`, error)
         return fallback
       })
 
     Promise.all([
-      loadSafe('Hidden Stars', getHiddenStars(), { items: [] }),
-      loadSafe('Risks', getRisks(), { items: [] }),
-      loadSafe('Trends', getTrends(), null),
-      loadSafe('Inventory', getOpsInventory(30), { low_stock: [] }),
-      loadSafe('Menu Matrix', getMenuMatrix(), { items: [] }),
-      loadSafe('Price Recommendations', getPriceRecommendations(), { recommendations: [] }),
+      loadSafe('Hidden Stars', getHiddenStars({ signal }), { items: [] }),
+      loadSafe('Risks', getRisks({ signal }), { items: [] }),
+      loadSafe('Trends', getTrends({ signal }), null),
+      loadSafe('Inventory', getOpsInventory(30, { signal }), { low_stock: [] }),
+      loadSafe('Menu Matrix', getMenuMatrix({ signal }), { items: [] }),
+      loadSafe('Price Recommendations', getPriceRecommendations({ signal }), { recommendations: [] }),
     ]).then(([hs, risks, trendData, inventory, menuMatrix, priceData]) => {
-      if (!active) return
+      if (signal.aborted) return
       setHiddenStars((hs.items || []).slice(0, 6))
       setRiskItems((risks.items || []).slice(0, 6))
       setTrends(trendData)
@@ -134,7 +137,7 @@ export default function Dashboard() {
     })
 
     return () => {
-      active = false
+      controller.abort()
     }
   }, [])
 

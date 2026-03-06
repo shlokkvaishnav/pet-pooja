@@ -642,13 +642,16 @@ def book_table(
         table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
         if not table:
             raise HTTPException(status_code=404, detail="Table not found")
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).with_for_update().first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
         if table.status != "empty":
             raise HTTPException(status_code=400, detail=f"Table is currently {table.status}, cannot book")
 
         # Generate unique order_id
         import uuid
         order_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
-        order_number = f"#{db.query(func.count(Order.id)).scalar() + 1}"
+        order_number = _generate_order_number(db)
 
         rid = _resolve_restaurant_id(db, restaurant_id)
         new_order = Order(
@@ -700,7 +703,7 @@ def settle_table(
     3. Free the table
     """
     try:
-        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).with_for_update().first()
         if not table:
             raise HTTPException(status_code=404, detail="Table not found")
         if table.status != "occupied":
@@ -752,7 +755,7 @@ def reserve_table(
     Reserve a free table.
     """
     try:
-        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).with_for_update().first()
         if not table:
             raise HTTPException(status_code=404, detail="Table not found")
         if table.status != "empty":
@@ -783,7 +786,7 @@ def unreserve_table(
     Remove reservation — set table back to empty.
     """
     try:
-        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).with_for_update().first()
         if not table:
             raise HTTPException(status_code=404, detail="Table not found")
         if table.status != "reserved":

@@ -335,7 +335,7 @@ void main() {
             };
         };
 
-        initializeWebGL();
+        initializeWebGL().catch((err) => console.warn('WebGL init failed, skipping light rays:', err));
 
         return () => {
             if (cleanupFunctionRef.current) {

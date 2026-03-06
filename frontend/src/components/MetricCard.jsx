@@ -10,7 +10,7 @@ function AnimatedValue({ value, isInView }) {
     // Try to extract a number for count-up
     const raw = typeof value === 'string' ? value.replace(/[^0-9.-]/g, '') : value
     const num = parseFloat(raw)
-    if (isNaN(num) || typeof value === 'string' && !/[\d]/.test(value)) {
+    if (isNaN(num) || (typeof value === 'string' && !/[\d]/.test(value))) {
       setDisplay(value)
       return
     }
