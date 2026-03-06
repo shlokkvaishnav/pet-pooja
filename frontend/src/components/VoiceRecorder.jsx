@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 
-export default function VoiceRecorder({ onRecorded }) {
+export default function VoiceRecorder({ onRecorded, onStartRecording }) {
   const [state, setState] = useState('idle') // idle | recording | processing
   const mediaRecorder = useRef(null)
   const chunks = useRef([])
@@ -32,6 +32,9 @@ export default function VoiceRecorder({ onRecorded }) {
 
   const startRecording = async () => {
     try {
+      // Notify parent to stop any playing audio (interrupt)
+      if (onStartRecording) onStartRecording()
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const audioCtx = new AudioContext()
       const source = audioCtx.createMediaStreamSource(stream)

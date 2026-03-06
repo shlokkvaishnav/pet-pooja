@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { submitTextOrder, transcribeAudio, confirmOrder } from '../api/client'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
@@ -15,7 +15,46 @@ export default function VoiceOrder() {
   const [textInput, setTextInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [isSpeaking, setIsSpeaking] = useState(false)
   const sessionId = useRef(generateSessionId())
+  const currentAudioRef = useRef(null)
+
+  // ── TTS Audio Playback ──
+  const playTTSAudio = useCallback((base64Audio) => {
+    if (!base64Audio) return  // TTS failed — degrade silently
+
+    // Stop anything currently playing
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause()
+      currentAudioRef.current.src = ''
+    }
+
+    const bytes = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0))
+    const blob = new Blob([bytes], { type: 'audio/mp3' })
+    const url = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    currentAudioRef.current = audio
+
+    audio.onended = () => {
+      URL.revokeObjectURL(url)
+      setIsSpeaking(false)
+    }
+    audio.onerror = () => {
+      URL.revokeObjectURL(url)
+      setIsSpeaking(false)
+    }
+    setIsSpeaking(true)
+    audio.play().catch(() => setIsSpeaking(false))
+  }, [])
+
+  // ── Stop TTS when user starts recording ──
+  const handleInterruptAudio = useCallback(() => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause()
+      currentAudioRef.current.src = ''
+      setIsSpeaking(false)
+    }
+  }, [])
 
   const handleTextOrder = async () => {
     if (!textInput.trim()) return
@@ -24,6 +63,8 @@ export default function VoiceOrder() {
     try {
       const data = await submitTextOrder(textInput, sessionId.current)
       setResult(data)
+      // Auto-play TTS response
+      if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
     } catch (err) {
       setError(err.response?.data?.detail || 'Order processing failed')
     }
@@ -36,6 +77,8 @@ export default function VoiceOrder() {
     try {
       const data = await transcribeAudio(audioBlob, sessionId.current)
       setResult(data)
+      // Auto-play TTS response
+      if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
     } catch (err) {
       const status = err.response?.status
       const detail = err.response?.data?.detail || 'Voice processing failed'
@@ -60,6 +103,7 @@ export default function VoiceOrder() {
   }
 
   const handleNewOrder = () => {
+    handleInterruptAudio()
     setResult(null)
     setError(null)
     setTextInput('')
@@ -135,7 +179,19 @@ export default function VoiceOrder() {
           <motion.div className="card" variants={staggerItem}>
             <div className="card-header">Voice Input</div>
             <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 32 }}>
-              <VoiceRecorder onRecorded={handleAudioRecorded} />
+              <VoiceRecorder onRecorded={handleAudioRecorded} onStartRecording={handleInterruptAudio} />
+              {isSpeaking && (
+                <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 20, justifyContent: 'center', marginTop: 12 }}>
+                  {[8, 16, 10].map((h, i) => (
+                    <span key={i} style={{
+                      width: 3, height: h, background: 'var(--accent, #ff6b35)', borderRadius: 2,
+                      animation: 'speakwave 0.8s ease-in-out infinite',
+                      animationDelay: `${i * 0.15}s`,
+                    }} />
+                  ))}
+                  <style>{`@keyframes speakwave { 0%,100%{transform:scaleY(1)} 50%{transform:scaleY(1.8)} }`}</style>
+                </div>
+              )}
             </div>
           </motion.div>
 
