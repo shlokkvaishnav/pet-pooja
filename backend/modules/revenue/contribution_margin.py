@@ -30,21 +30,28 @@ def calculate_margins(db: Session) -> list[dict]:
         }
     ]
     """
-    # Get items with revenue data — eagerly load category to avoid N+1
+    # Get items + category (no aggregates here)
     items = (
-        db.query(
-            MenuItem,
-            func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
-        )
-        .outerjoin(SaleTransaction, MenuItem.id == SaleTransaction.item_id)
+        db.query(MenuItem)
         .options(joinedload(MenuItem.category))
         .filter(MenuItem.is_available == True)
-        .group_by(MenuItem.id)
         .all()
     )
 
+    # Revenue per item (aggregate in separate query to avoid GROUP BY issues)
+    revenue_rows = (
+        db.query(
+            SaleTransaction.item_id,
+            func.coalesce(func.sum(SaleTransaction.total_price), 0).label("total_revenue"),
+        )
+        .group_by(SaleTransaction.item_id)
+        .all()
+    )
+    revenue_map = {r.item_id: float(r.total_revenue or 0) for r in revenue_rows}
+
     results = []
-    for item, total_revenue in items:
+    for item in items:
+        total_revenue = revenue_map.get(item.id, 0.0)
         cm = item.selling_price - item.food_cost
         margin_pct = (cm / item.selling_price * 100) if item.selling_price > 0 else 0
 

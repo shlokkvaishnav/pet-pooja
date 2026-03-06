@@ -9,13 +9,12 @@ import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
+from api.deps import get_voice_pipeline
 from database import get_db
 from models import Order
 from modules.voice.order_builder import build_order, generate_kot, save_order_to_db
@@ -24,21 +23,9 @@ from modules.voice.voice_config import cfg
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.voice")
 
-# Rate limiter instance — resolved from app state at request time
-_limiter = Limiter(key_func=get_remote_address)
-
 # Max audio file size: 10 MB
 _MAX_AUDIO_SIZE = 10 * 1024 * 1024
 _ALLOWED_EXTENSIONS = {".wav", ".mp3", ".ogg", ".webm", ".m4a", ".flac"}
-
-
-def _get_pipeline(db: Session = Depends(get_db)):
-    """Get VoicePipeline from app state (loaded at startup with DB data)."""
-    from main import app
-    pipeline = getattr(app.state, "voice_pipeline", None)
-    if pipeline is None:
-        raise HTTPException(status_code=503, detail="Voice pipeline not loaded")
-    return pipeline
 
 
 class TextInput(BaseModel):
@@ -86,9 +73,7 @@ async def _save_audio_temp(audio: UploadFile) -> str:
 # ── 1. POST /api/voice/transcribe ──
 
 @router.post("/transcribe")
-@_limiter.limit("10/minute")
 async def transcribe_audio(
-    request: Request,
     audio: UploadFile = File(...),
 ):
     """
@@ -148,18 +133,15 @@ async def transcribe_audio(
 # ── 2. POST /api/voice/process-audio ──
 
 @router.post("/process-audio")
-@_limiter.limit("10/minute")
 async def process_audio(
-    request: Request,
     audio: UploadFile = File(...),
     session_id: str = None,
-    db: Session = Depends(get_db),
+    pipeline=Depends(get_voice_pipeline),
 ):
     """
     Full pipeline: audio → transcript → parsed order → upsell suggestions.
     Returns: {transcript, intent, items, order, upsell_suggestions}
     """
-    pipeline = _get_pipeline(db)
     audio_path = await _save_audio_temp(audio)
     try:
         result = pipeline.process_audio(audio_path, session_id=session_id)
@@ -200,14 +182,13 @@ async def process_audio(
 @router.post("/process")
 async def process_text(
     body: TextInput,
-    db: Session = Depends(get_db),
+    pipeline=Depends(get_voice_pipeline),
 ):
     """
     Text → full pipeline result (for testing without microphone).
     Accepts: {text: string}
     Returns: same as /process-audio but from text input
     """
-    pipeline = _get_pipeline(db)
     try:
         result = pipeline.process_text(body.text, session_id=body.session_id)
 
@@ -346,10 +327,9 @@ async def voice_order_legacy(
     audio: UploadFile = File(None),
     text: str = None,
     session_id: str = None,
-    db: Session = Depends(get_db),
+    pipeline=Depends(get_voice_pipeline),
 ):
     """Legacy endpoint — process voice or text order."""
-    pipeline = _get_pipeline(db)
     audio_path = None
 
     try:

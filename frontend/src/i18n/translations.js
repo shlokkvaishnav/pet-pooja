@@ -440,6 +440,101 @@ const translations = {
         login_signup: 'સાઇન અપ',
         login_error_fields: 'કૃપા કરીને બધા ફીલ્ડ ભરો.',
     },
+
+    hi_en: {
+        // Navbar
+        nav_product: 'PRODUCT',
+        nav_about: 'ABOUT US',
+        nav_contact: 'CONTACT',
+        nav_login: 'LOGIN',
+        nav_dashboard: 'DASHBOARD DEKHO',
+
+        // Landing — Hero
+        hero_tagline_base: 'Tumhara Asli Revenue Intelligence ',
+        hero_tagline_words: ['Companion', 'Saathi', 'Copilot'],
+        hero_desc: 'Sizzle ek all-in-one AI platform hai modern restaurants ke liye. Real-time revenue intelligence se lekar English, Hindi aur Hinglish mein voice ordering tak — apni kitchen, menu aur margins pe full control lo.',
+        hero_cta: 'PLATFORM EXPLORE KARO',
+        hero_marquee: 'TUMHARE FAVOURITE RESTAURANT GIANTS KA BHAROSA',
+
+        // Landing — Features
+        feature_1_title: 'Revenue Intelligence',
+        feature_1_desc: 'Tumhare poore menu catalogue mein real-time margin analysis aur menu health scoring.',
+        feature_2_title: 'Voice Ordering',
+        feature_2_desc: 'AI-powered speech recognition. Hindi, English ya Hinglish mein orders lo — hands free.',
+        feature_3_title: 'Menu Matrix',
+        feature_3_desc: 'Har dish ko Star, Hidden Star, Workhorse ya Dog mein classify karo. Data pe chalo, gut pe nahi.',
+        feature_4_title: 'Smart Combos',
+        feature_4_desc: 'Real order patterns se auto-generated combo bundles. Ticket size badhao effortlessly.',
+
+        // Landing — About preview
+        about_tag: 'SIZZLE KE BAARE MEIN',
+        about_heading_1: 'Restaurants ke liye banaya.',
+        about_heading_2: 'AI se powered.',
+        about_desc: 'Humne Sizzle isliye banaya kyunki restaurant owners ko better tools deserve karte hain. Yeh ek aur POS system nahi — balki ek saccha revenue intelligence copilot hai. Hidden star discovery se lekar automated KOT generation tak, har feature margins badhane aur kitchen ki friction hatane ke liye design kiya gaya hai.',
+        stat_restaurants: 'Restaurants',
+        stat_uplift: 'Avg Revenue Uplift',
+        stat_languages: 'Languages Supported',
+
+        // Landing — CTA
+        cta_heading: 'Apna restaurant transform karne ke liye ready ho?',
+        cta_sub: 'Hazaaron restaurant owners already Sizzle use kar rahe hain.',
+        cta_btn: 'FREE MEIN SHURU KARO',
+
+        // Landing — Contact
+        contact_tag: 'SAMPARK KARO',
+        contact_heading: 'Humse Baat Karo',
+        contact_desc: 'Koi sawal hai? Hum sunna chahte hain. Reach out karo, jaldi reply karenge.',
+
+        // Footer
+        footer_desc: 'Modern kitchen ke liye AI-powered restaurant management.',
+        footer_product: 'Product',
+        footer_company: 'Company',
+        footer_support: 'Support',
+
+        // About page
+        about_hero_tag: 'HAMARI KAHANI',
+        about_hero_title_1: 'Hum bana rahe hain future',
+        about_hero_title_2: 'restaurant intelligence ka.',
+        about_hero_sub: 'Pune ki ek chhoti si kitchen se lekar 2,400+ restaurants tak poore India mein — yeh hai Sizzle ki kahani.',
+        about_2022_title: 'Jahaan Sab Shuru Hua',
+        about_2022_desc: 'Sizzle ki shuruaat tab hui jab hamare founders — ek software engineer aur ek third-generation restaurant owner — chai aur ek spreadsheet ke saath baithe. Woh spreadsheet menu profitability track karne ke liye thi. Par ho nahi paya. Wohi frustration ek AI-powered platform ka seed bani.',
+        about_2023_title: 'Pehla Product, Pehli Kitchen',
+        about_2023_desc: 'Humne Pune ke ek restaurant mein apna Revenue Intelligence Module launch kiya. 60 din ke andar, owner ne contribution margins mein 14% ki growth dekhi. Tab samajh aaya — kuch bada ban sakta hai. Us saal 120 restaurants onboard hue, voice ordering engine bani, aur pre-seed round close hua.',
+        about_2024_title: 'Poore India Mein Expansion',
+        about_2024_desc: 'Sizzle Mumbai, Bangalore aur Ahmedabad tak expand hua. Humne Marathi, Kannada aur Gujarati voice engine mein add ki — kyunki asli kitchens English mein nahi chalti. Smart Combo Engine launch hua — restaurants ne average 22% ticket size increase dekha.',
+        about_2025_title: 'AI Copilot Era',
+        about_2025_desc: 'Hum dashboard se evolve hokar ek sachcha copilot ban gaye. Sizzle ab demand dips predict karta hai before they happen, real-time mein price adjustments recommend karta hai, aur voice commands se auto KOT tickets generate karta hai. 2,400+ active restaurants cross kiye aur cloud kitchen chains ke saath kaam shuru hua.',
+        about_values_tag: 'HUM KYA MAANTE HAIN',
+        about_values_title: 'Hamare Core Values',
+        about_value_1_title: 'Kitchen-First Soch',
+        about_value_1_desc: 'Har feature ship hone se pehle asli kitchen mein test hota hai. Agar Friday night rush survive nahi kiya, toh ship nahi hoga.',
+        about_value_2_title: 'Data Over Gut',
+        about_value_2_desc: 'Hum guesswork ko intelligence se replace karte hain. Har menu decision, har combo, har price point — numbers pe based.',
+        about_value_3_title: 'Unki Bhaasha Bolo',
+        about_value_3_desc: 'Literally. Hamara voice engine Hindi, English, Marathi, Kannada aur Gujarati mein kaam karta hai — kyunki India aise order karta hai.',
+        about_value_4_title: 'Speed Is Respect',
+        about_value_4_desc: 'Restaurant owners ke paas slow software ke liye time nahi hai. Har screen fast load ho, har insight actionable ho, har click count kare.',
+        about_num_restaurants: 'Active Restaurants',
+        about_num_languages: 'Languages Supported',
+        about_num_uplift: 'Avg Revenue Uplift',
+        about_num_cities: 'Cities & Growing',
+        about_cta_heading: 'Sizzle family mein aane ke liye ready?',
+        about_cta_sub: 'Dekho kaise hum tumhare restaurant ki revenue transform kar sakte hain.',
+
+        // Login
+        login_back: 'Home Pe Waapas Jao',
+        login_left_sub: 'Sizzle AI — Tumhara restaurant copilot.',
+        login_left_title_1: 'Manage Karo',
+        login_left_title_2: 'apna restaurant',
+        login_signin: 'Sign In',
+        login_email_placeholder: 'Email ya Username',
+        login_password_placeholder: 'Password',
+        login_forgot: 'Password bhool gaye?',
+        login_submit: 'Sign In',
+        login_signing_in: 'Sign in ho raha hai...',
+        login_signup: 'Sign Up',
+        login_error_fields: 'Please saare fields bhar do.',
+    },
 }
 
 export default translations

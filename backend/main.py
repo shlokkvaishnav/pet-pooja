@@ -11,13 +11,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel, Field
 
 from database import engine, Base, SessionLocal, get_db
 from api.routes_revenue import router as revenue_router
+from api.routes_ops import router as ops_router
 from api.routes_voice import router as voice_router
 from api.auth import require_auth, authenticate_staff
 from api.rate_limit import rate_limit_middleware
@@ -100,7 +98,6 @@ async def lifespan(app: FastAPI):
 
         # Build pipeline with DB data -- no hardcoded items
         app.state.voice_pipeline = VoicePipeline(
-            db_session=db,
             menu_items=menu_items,
             combo_rules=[],
             hidden_stars=[],
@@ -111,6 +108,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Voice pipeline failed to load: {e}")
         logger.info("Text-only pipeline will still work")
         app.state.voice_pipeline = None
+    finally:
+        db.close()
 
     # -- Start background combo training scheduler --
     try:
@@ -126,7 +125,6 @@ async def lifespan(app: FastAPI):
         stop_combo_scheduler()
     except Exception:
         pass
-    db.close()
     logger.info("Server shutting down...")
 
 
@@ -136,12 +134,6 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
-
-# ── Rate limiter (per-IP) ──
-_RATE_LIMIT_DEFAULT = os.getenv("RATE_LIMIT_DEFAULT", "60/minute")
-limiter = Limiter(key_func=get_remote_address, default_limits=[_RATE_LIMIT_DEFAULT])
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -178,6 +170,12 @@ app.include_router(
     tags=["Voice"],
     dependencies=[Depends(require_auth)],
 )
+app.include_router(
+    ops_router,
+    prefix="/api/ops",
+    tags=["Operations"],
+    dependencies=[Depends(require_auth)],
+)
 
 
 # ── Auth endpoints (always public) ──
@@ -200,13 +198,35 @@ def rebuild_faiss_index(db=Depends(get_db)):
     Force-rebuild the FAISS semantic index from current DB menu items.
     Call this after menu item create/update/delete to keep the index current.
     """
+    from models import MenuItem
     from modules.voice.item_matcher import rebuild_index
+
     corpus = rebuild_index(db)
-    # Also update the pipeline's corpus reference
+    menu_items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
+
+    # Also update the pipeline's menu + corpus reference
     pipeline = getattr(app.state, "voice_pipeline", None)
     if pipeline:
-        pipeline.corpus = corpus
-    return {"status": "ok", "corpus_size": len(corpus)}
+        pipeline.refresh_menu(menu_items, corpus=corpus)
+
+    return {"status": "ok", "corpus_size": len(corpus), "menu_items": len(menu_items)}
+
+
+@app.post("/api/voice/reload-menu", tags=["Voice"], dependencies=[Depends(require_auth)])
+def reload_menu(db=Depends(get_db)):
+    """
+    Refresh menu items in the voice pipeline without rebuilding the FAISS index.
+    This updates the fuzzy corpus and in-memory menu references only.
+    """
+    from models import MenuItem
+
+    menu_items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
+    pipeline = getattr(app.state, "voice_pipeline", None)
+    if not pipeline:
+        return {"status": "error", "detail": "Voice pipeline not loaded"}
+
+    pipeline.refresh_menu(menu_items)
+    return {"status": "ok", "menu_items": len(menu_items), "corpus_size": len(pipeline.corpus)}
 
 
 @app.get("/api/health")
@@ -216,7 +236,7 @@ def health():
         "status": "healthy",
         "service": "petpooja-ai-copilot",
         "version": "0.2.0",
-        "pipeline_loaded": hasattr(app.state, "voice_pipeline") and app.state.voice_pipeline is not None,
+        "pipeline_loaded": getattr(app.state, "voice_pipeline", None) is not None,
     }
 
     # TTS status

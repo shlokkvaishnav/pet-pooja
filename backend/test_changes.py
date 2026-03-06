@@ -344,92 +344,33 @@ def test_hindi_numbers():
 # ============================================================
 
 def test_rate_limiting():
-    """Verify slowapi rate limiting is wired up correctly."""
+    """Verify in-process rate limiting is wired up correctly."""
     print("=" * 60)
     print("TEST 4: RATE LIMITING ON COMPUTE-HEAVY ENDPOINTS")
     print("=" * 60)
 
-    # 4a. slowapi installed
-    try:
-        import slowapi
-        from slowapi import Limiter
-        from slowapi.errors import RateLimitExceeded
-        _pass("slowapi is installed and importable")
-    except ImportError:
-        _fail("slowapi import", "pip install slowapi")
-        return
-
-    # 4b. main.py has rate limiter configured
+    # 4a. main.py has rate limiter middleware configured
     try:
         with open("main.py", "r", encoding="utf-8") as f:
             source = f.read()
-        assert "Limiter(" in source, "Limiter not instantiated"
-        assert "app.state.limiter" in source, "limiter not attached to app.state"
-        assert "RateLimitExceeded" in source, "RateLimitExceeded handler not registered"
-        assert "get_remote_address" in source, "get_remote_address not used as key_func"
-        _pass("main.py configures rate limiter with per-IP key")
+        assert "rate_limit_middleware" in source, "rate_limit_middleware not imported"
+        assert "app.middleware("http")(rate_limit_middleware)" in source, "rate limit middleware not wired"
+        _pass("main.py wires in-process rate limiting middleware")
     except AssertionError as e:
-        _fail("main.py rate limiter config", str(e))
+        _fail("main.py rate limit middleware", str(e))
 
-    # 4c. Voice routes have rate limits on compute-heavy endpoints
+    # 4b. rate_limit.py has path-specific limits
     try:
-        with open("api/routes_voice.py", "r", encoding="utf-8") as f:
-            voice_source = f.read()
-
-        # Check /transcribe has rate limit
-        transcribe_idx = voice_source.index("def transcribe_audio")
-        transcribe_block = voice_source[max(0, transcribe_idx - 200):transcribe_idx]
-        assert "_limiter.limit" in transcribe_block, "/transcribe missing rate limit"
-        _pass("/api/voice/transcribe has rate limit decorator")
-
-        # Check /process-audio has rate limit
-        process_idx = voice_source.index("def process_audio")
-        process_block = voice_source[max(0, process_idx - 200):process_idx]
-        assert "_limiter.limit" in process_block, "/process-audio missing rate limit"
-        _pass("/api/voice/process-audio has rate limit decorator")
-    except (ValueError, AssertionError) as e:
-        _fail("Voice route rate limits", str(e))
-
-    # 4d. Revenue routes have rate limit on retrain
-    try:
-        with open("api/routes_revenue.py", "r", encoding="utf-8") as f:
-            rev_source = f.read()
-
-        retrain_idx = rev_source.index("def retrain_combos")
-        retrain_block = rev_source[max(0, retrain_idx - 200):retrain_idx]
-        assert "_limiter.limit" in retrain_block, "/combos/retrain missing rate limit"
-        _pass("/api/revenue/combos/retrain has rate limit decorator")
-    except (ValueError, AssertionError) as e:
-        _fail("Revenue route rate limits", str(e))
-
-    # 4e. Request parameter added to rate-limited endpoints
-    try:
-        # Rate-limited endpoints must accept Request as a parameter
-        assert "request: Request" in voice_source, "voice routes missing Request param"
-        assert "request: Request" in rev_source, "revenue routes missing Request param"
-        _pass("Rate-limited endpoints accept Request parameter")
+        with open("api/rate_limit.py", "r", encoding="utf-8") as f:
+            rl_source = f.read()
+        assert "RATE_LIMIT_VOICE_RPM" in rl_source, "voice RPM env var missing"
+        assert "RATE_LIMIT_REVENUE_RPM" in rl_source, "revenue RPM env var missing"
+        assert "RATE_LIMIT_DEFAULT_RPM" in rl_source, "default RPM env var missing"
+        _pass("rate_limit.py defines per-group RPM settings")
     except AssertionError as e:
-        _fail("Request param on rate-limited endpoints", str(e))
-
-    # 4f. RATE_LIMIT_DEFAULT is env-configurable
-    try:
-        assert "RATE_LIMIT_DEFAULT" in source, "RATE_LIMIT_DEFAULT env var not used"
-        assert 'os.getenv("RATE_LIMIT_DEFAULT"' in source, "not reading from env"
-        _pass("Global rate limit is env-configurable via RATE_LIMIT_DEFAULT")
-    except AssertionError as e:
-        _fail("RATE_LIMIT_DEFAULT env config", str(e))
-
-    # 4g. Functional: FastAPI app imports with limiter attached
-    try:
-        from main import app
-        assert hasattr(app.state, "limiter"), "limiter not on app.state"
-        assert app.state.limiter is not None, "limiter is None"
-        _pass("FastAPI app.state.limiter is attached and not None")
-    except Exception as e:
-        _fail("app.state.limiter check", str(e))
+        _fail("rate_limit.py settings", str(e))
 
     print()
-
 
 # ============================================================
 # 5. INTEGRATION: Full pipeline with extended numbers

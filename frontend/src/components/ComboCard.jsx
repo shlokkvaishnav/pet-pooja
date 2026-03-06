@@ -1,60 +1,109 @@
+import { motion, useInView } from 'motion/react'
+import { useRef } from 'react'
+import { formatRupees, formatConfidence, formatSupport, formatLift } from '../utils/format'
+
 export default function ComboCard({ combo }) {
+  const ref = useRef(null)
+  const isInView = useInView(ref, { once: true })
   const itemNames = combo.item_names || []
-  const displayName = itemNames.length > 0 ? itemNames.join(' + ') : combo.name
+
+  const confPct = (combo.confidence * 100)
+  const confColor = confPct >= 80 ? 'var(--success)' : confPct >= 60 ? 'var(--warning)' : 'var(--danger)'
 
   return (
-    <div className="card">
-      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 13 }}>
+    <motion.div
+      ref={ref}
+      className="card"
+      whileHover={{ y: -4, borderColor: 'var(--border-mid)', boxShadow: 'var(--shadow-lg)', transition: { duration: 0.2 } }}
+    >
+      <div className="card-header" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* Item chips row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {combo.antecedent_name ? (
             <>
-              <span style={{ color: 'var(--text-muted)' }}>If orders </span>
-              <strong>{combo.antecedent_name}</strong>
-              <span style={{ color: 'var(--text-muted)' }}> → suggest </span>
-              <strong>{combo.consequent_name}</strong>
+              <span style={{
+                padding: '3px 10px', borderRadius: 'var(--radius-full)', fontSize: 12, fontWeight: 500,
+                background: 'var(--bg-overlay)', color: 'var(--text-primary)',
+              }}>{combo.antecedent_name}</span>
+              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>+</span>
+              <span style={{
+                padding: '3px 10px', borderRadius: 'var(--radius-full)', fontSize: 12, fontWeight: 500,
+                background: 'var(--bg-overlay)', color: 'var(--text-primary)',
+              }}>{combo.consequent_name}</span>
             </>
+          ) : itemNames.length > 0 ? (
+            itemNames.map((name, i) => (
+              <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {i > 0 && <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>+</span>}
+                <span style={{
+                  padding: '3px 10px', borderRadius: 'var(--radius-full)', fontSize: 12, fontWeight: 500,
+                  background: 'var(--bg-overlay)', color: 'var(--text-primary)',
+                }}>{name}</span>
+              </span>
+            ))
           ) : (
-            <strong>{displayName}</strong>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>{combo.name}</span>
           )}
-        </span>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <span className="tag tag-star">Lift: {parseFloat(combo.lift)?.toFixed(2)}x</span>
+        </div>
+
+        {/* Tags row */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span className="tag tag-star" style={{ fontSize: 10 }}>{formatLift(combo.lift)} lift</span>
           {combo.combo_structure && (
-            <span className={`tag tag-${combo.combo_structure === 'diverse' ? 'green' : 'amber'}`}
-              style={{ fontSize: 10 }}>
-              {combo.combo_structure === 'diverse' ? '✓ Cross-category' : 'Same category'}
+            <span className={`tag tag-${combo.combo_structure === 'diverse' ? 'green' : 'amber'}`} style={{ fontSize: 10 }}>
+              {combo.combo_structure === 'diverse' ? 'Cross-category' : 'Same category'}
             </span>
           )}
         </div>
       </div>
+
       <div className="card-body">
-        {/* Confidence Progress Bar */}
+        {/* Confidence bar */}
         <div style={{ marginBottom: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
-            <span>Confidence</span>
-            <span>{(combo.confidence * 100)?.toFixed(1)}%</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+            <span style={{ color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Confidence</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: confColor }}>{formatConfidence(combo.confidence)}</span>
           </div>
-          <div style={{ width: '100%', height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ width: `${combo.confidence * 100}%`, height: '100%', background: 'var(--blue)', borderRadius: 3 }} />
+          <div style={{ width: '100%', height: 4, background: 'var(--bg-overlay)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+            <motion.div
+              style={{ height: '100%', background: confColor, borderRadius: 'var(--radius-full)' }}
+              initial={{ width: 0 }}
+              animate={isInView ? { width: `${confPct}%` } : {}}
+              transition={{ duration: 0.8, delay: 0.2, ease: [0.25, 0.46, 0.45, 0.94] }}
+            />
           </div>
         </div>
 
-        {/* Pricing & Gains */}
-        <div style={{ padding: '8px 12px', background: 'var(--surface2)', borderRadius: 6 }}>
+        {/* Compact stat row */}
+        <div style={{ display: 'flex', gap: 12, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          {combo.support !== undefined && <span>{formatSupport(combo.support)}</span>}
+        </div>
+
+        {/* Pricing block */}
+        <div style={{ padding: 'var(--space-3) var(--space-4)', background: 'var(--bg-overlay)', borderRadius: 'var(--radius-sm)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-            <span style={{ color: 'var(--text-muted)' }}>CM Gain</span>
-            <span style={{ color: 'var(--green)', fontWeight: 600 }}>+₹{parseFloat(combo.cm_gain)?.toFixed(2)}</span>
+            <span style={{ color: 'var(--text-muted)' }}>Bundle Price</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {combo.sum_original_price && (
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', textDecoration: 'line-through' }}>
+                  ₹{parseFloat(combo.sum_original_price).toFixed(0)}
+                </span>
+              )}
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                ₹{parseFloat(combo.suggested_bundle_price).toFixed(0)}
+              </span>
+            </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-            <span style={{ color: 'var(--text-muted)' }}>Suggested Bundle Price</span>
-            <span style={{ fontWeight: 600 }}>₹{parseFloat(combo.suggested_bundle_price)?.toFixed(2)}</span>
+            <span style={{ color: 'var(--text-muted)' }}>CM Gain</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--success)' }}>+₹{parseFloat(combo.cm_gain).toFixed(0)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
             <span style={{ color: 'var(--text-muted)' }}>Discount</span>
-            <span style={{ color: 'var(--amber)', fontWeight: 600 }}>{combo.discount_pct?.toFixed(1)}%</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--warning)' }}>{combo.discount_pct?.toFixed(1)}%</span>
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   )
 }

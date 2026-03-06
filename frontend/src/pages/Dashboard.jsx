@@ -19,10 +19,14 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, PieChart, Pie, Cell, Legend, CartesianGrid, Area, AreaChart,
 } from 'recharts'
+import { motion, AnimatePresence } from 'motion/react'
+import { StaggerReveal, ScrollReveal, staggerContainer, staggerItem, fadeInUp } from '../utils/animations'
+import { formatRupees, formatRupeesShort, formatPct } from '../utils/format'
+import { TrendUp, TrendDown, Warning, Star, EyeSlash, ArrowRight } from '@phosphor-icons/react'
 
 const CHART_COLORS = ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316']
-const TOOLTIP_STYLE = { backgroundColor: 'var(--surface)', borderColor: 'var(--border)', color: 'var(--text)', fontSize: 12 }
-const TICK_STYLE = { fill: 'var(--text-muted)', fontSize: 11 }
+const TOOLTIP_STYLE = { backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-body)' }
+const TICK_STYLE = { fill: 'var(--text-secondary)', fontSize: 11 }
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState(null)
@@ -38,11 +42,27 @@ export default function Dashboard() {
   const [customerReturns, setCustomerReturns] = useState(null)
   const [menuComplexity, setMenuComplexity] = useState([])
   const [showHealthBreakdown, setShowHealthBreakdown] = useState(false)
+  const [secondaryLoaded, setSecondaryLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let active = true
+
+    // Load critical metrics first so the page can render quickly.
+    getDashboardMetrics()
+      .then((m) => {
+        if (!active) return
+        setMetrics(m)
+      })
+      .catch(err => {
+        console.error('Dashboard load failed:', err)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    // Load secondary datasets in the background.
     Promise.all([
-      getDashboardMetrics(),
       getHiddenStars().catch(() => ({ items: [] })),
       getRisks().catch(() => ({ items: [] })),
       getCategoryBreakdown().catch(() => ({ categories: [] })),
@@ -55,8 +75,8 @@ export default function Dashboard() {
       getCustomerReturns().catch(() => null),
       getMenuComplexity().catch(() => ({ categories: [] })),
     ])
-      .then(([m, hs, ri, cb, tr, wm, el, cn, ps, wa, cr, mc]) => {
-        setMetrics(m)
+      .then(([hs, ri, cb, tr, wm, el, cn, ps, wa, cr, mc]) => {
+        if (!active) return
         setHiddenStars((hs.items || hs || []).slice(0, 5))
         setRiskItems((ri.items || ri || []).slice(0, 5))
         setCategoryData(cb.categories || cb || [])
@@ -69,12 +89,29 @@ export default function Dashboard() {
         setCustomerReturns(cr)
         setMenuComplexity(mc.categories || [])
       })
-      .catch(err => console.error('Dashboard load failed:', err))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (active) setSecondaryLoaded(true)
+      })
+
+    return () => {
+      active = false
+    }
   }, [])
 
   if (loading) {
-    return <div className="loading"><div className="spinner" /> Loading dashboard...</div>
+    return (
+      <div style={{ padding: 'var(--space-12)' }}>
+        <div className="grid-3" style={{ marginBottom: 'var(--space-6)' }}>
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 130, animationDelay: `${i * 100}ms` }} />
+          ))}
+        </div>
+        <div className="grid-2">
+          <div className="skeleton" style={{ height: 300 }} />
+          <div className="skeleton" style={{ height: 300 }} />
+        </div>
+      </div>
+    )
   }
 
   if (!metrics) {
@@ -86,303 +123,408 @@ export default function Dashboard() {
   const peakHours = metrics.peak_hours || []
   const seasonalPatterns = trends?.seasonal_patterns || []
 
-  // Prepare category pie data
   const categoryPieData = categoryData.slice(0, 6).map((c, i) => ({
     name: c.category_name || c.category,
     value: c.total_revenue || 0,
     fill: CHART_COLORS[i % CHART_COLORS.length],
   }))
 
+  const alerts = []
+  if (riskItems.length > 0) {
+    alerts.push({ type: 'danger', text: `${riskItems.length} underperformers dragging avg margin` })
+  }
+  if (driftItems.length > 0) {
+    alerts.push({ type: 'warning', text: `${driftItems.length} items drifting quadrants` })
+  }
+  if (hiddenStars.length > 0) {
+    alerts.push({ type: 'info', text: `${hiddenStars.length} hidden gems ready to promote` })
+  }
+
+  const chartTooltipStyle = {
+    backgroundColor: 'var(--bg-surface)',
+    borderColor: 'var(--border-subtle)',
+    color: 'var(--text-primary)',
+    borderRadius: 8,
+    fontSize: 12,
+    fontFamily: 'var(--font-body)',
+  }
+
   return (
-    <div>
-      <div className="page-header">
-        <h1>Dashboard</h1>
-        <p>Revenue intelligence overview — all metrics at a glance</p>
-      </div>
-
-      {/* ─── KPI Cards Row 1: Strategic ─── */}
-      <div className="grid-4" style={{ marginBottom: 16 }}>
-        <MetricCard label="Total Revenue" value={`₹${metrics.total_revenue?.toLocaleString() || 0}`} color="var(--blue)" icon="💰" />
-        <MetricCard label="Avg CM%" value={`${metrics.avg_cm_percent || 0}%`} color="var(--green)" icon="📈" />
-        <MetricCard label="Items At Risk" value={metrics.items_at_risk_count || 0} color="var(--red)" icon="⚠️" />
-        <MetricCard label="Uplift Potential" value={`₹${metrics.uplift_potential?.toLocaleString() || 0}`} color="var(--amber)" icon="🚀" />
-      </div>
-
-      {/* ─── KPI Cards Row 2: Operational ─── */}
-      <div className="grid-4" style={{ marginBottom: 24 }}>
-        <MetricCard label="Avg Order Value" value={`₹${metrics.avg_order_value?.toLocaleString() || 0}`} color="var(--purple)" icon="🧾" />
-        <MetricCard label="Total Orders (30d)" value={metrics.total_orders || 0} color="var(--blue)" icon="📋" />
-        <div className="card" style={{ cursor: 'pointer' }} onClick={() => setShowHealthBreakdown(!showHealthBreakdown)}>
-          <div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 16 }}>
-            <div>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 1 }}>
-                Health Score <span style={{ fontSize: 10, opacity: 0.7 }}>ⓘ click</span>
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: metrics.health_score >= 60 ? 'var(--green)' : metrics.health_score >= 40 ? 'var(--amber)' : 'var(--red)' }}>
-                {metrics.health_score || 0}
-              </div>
-            </div>
-            <div style={{ fontSize: 28 }}>🏥</div>
-          </div>
+    <motion.div
+      className="app-page"
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35 }}
+    >
+      <motion.div
+        className="app-hero"
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1, duration: 0.5 }}
+      >
+        <div>
+          <div className="app-hero-eyebrow">Overview</div>
+          <h1 className="app-hero-title">Revenue Overview</h1>
+          <p className="app-hero-sub">
+            Last updated - {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+          </p>
         </div>
-        <MetricCard label="Peak Hour" value={peakHours[0]?.label || '—'} suffix={peakHours[0] ? ` (${peakHours[0].order_count} orders)` : ''} color="var(--amber)" icon="⏰" />
-      </div>
-
-      {/* ─── Health Score Breakdown (collapsible) ─── */}
-      {showHealthBreakdown && healthBreakdown.components && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-header">🏥 Health Score Breakdown</div>
-          <div className="card-body">
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
-              {healthBreakdown.explanation}
-            </p>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              {healthBreakdown.components.map((c, i) => (
-                <div key={i} style={{ flex: '1 1 200px', padding: 12, background: 'var(--surface2)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>{c.name}</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: c.score >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                    {c.score > 0 ? '+' : ''}{c.score} <span style={{ fontSize: 11, fontWeight: 400 }}>/ {c.max}</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{c.detail}</div>
-                </div>
-              ))}
+        <div className="app-hero-metrics">
+          {[
+            { label: 'Total Revenue', value: formatRupeesShort(metrics.total_revenue) },
+            { label: 'Orders (30d)', value: metrics.total_orders || 0 },
+            { label: 'Menu Health', value: metrics.health_score || 0 },
+          ].map((item) => (
+            <div key={item.label} className="app-kpi">
+              <div className="app-kpi-label">{item.label}</div>
+              <div className="app-kpi-value">{item.value}</div>
             </div>
+          ))}
+        </div>
+      </motion.div>
+
+      {!secondaryLoaded && (
+        <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+          <div className="card-body" style={{ fontSize: 12, color: 'var(--text-muted)', padding: 'var(--space-3) var(--space-5)' }}>
+            Loading advanced insights...
           </div>
         </div>
       )}
 
-      {/* ─── Charts Row 1: Category CM% + Peak Hours ─── */}
-      <div className="grid-2" style={{ marginBottom: 24 }}>
-        <div className="card">
-          <div className="card-header">📊 Average CM% per Category</div>
+      {/* Zone 2: Alert Rail */}
+      {alerts.length > 0 && (
+        <div style={{ display: 'flex', gap: 'var(--space-3)', marginBottom: 'var(--space-6)', overflowX: 'auto', paddingBottom: 4 }}>
+          {alerts.map((alert, i) => (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.3 + i * 0.08, duration: 0.3 }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-2)',
+                padding: 'var(--space-2) var(--space-4)',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-full)',
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                background: alert.type === 'danger' ? 'var(--danger)' : alert.type === 'warning' ? 'var(--warning)' : 'var(--info)',
+              }} />
+              {alert.text}
+              <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />
+            </motion.div>
+          ))}
+        </div>
+      )}
+
+      {/* Zone 3: KPI Cards */}
+      <StaggerReveal className="grid-3" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
+        <motion.div variants={staggerItem}>
+          <MetricCard label="Menu Health" value={metrics.health_score || 0} color={metrics.health_score >= 60 ? 'var(--success)' : metrics.health_score >= 40 ? 'var(--warning)' : 'var(--danger)'} icon="" />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard label="Avg Contribution Margin" value={formatPct(metrics.avg_cm_percent)} color="var(--success)" icon="" />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard label="Star Items" value={metrics.stars_count || hiddenStars.length || 0} color="var(--success)" icon="" />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard label="Hidden Gems" value={hiddenStars.length || 0} color="var(--data-5)" icon="" />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard label="Underperformers" value={metrics.items_at_risk_count || 0} color="var(--danger)" icon="" />
+        </motion.div>
+        <motion.div variants={staggerItem}>
+          <MetricCard label="Price Opportunities" value={formatRupeesShort(metrics.uplift_potential)} color="var(--warning)" icon="" />
+        </motion.div>
+      </StaggerReveal>
+
+      {/* Health Score Breakdown (collapsible) */}
+      <div style={{ marginBottom: 'var(--space-6)' }}>
+        <button className="btn btn-ghost" onClick={() => setShowHealthBreakdown(!showHealthBreakdown)} style={{ fontSize: 12, marginBottom: 'var(--space-3)' }}>
+          {showHealthBreakdown ? '' : ''} Health Score Breakdown
+        </button>
+        <AnimatePresence>
+          {showHealthBreakdown && healthBreakdown.components && (
+            <motion.div
+              className="card"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
+            >
+              <div className="card-body">
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 'var(--space-4)' }}>
+                  {healthBreakdown.explanation}
+                </p>
+                <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
+                  {healthBreakdown.components.map((c, i) => (
+                    <div key={i} style={{
+                      flex: '1 1 200px', padding: 'var(--space-4)', background: 'var(--bg-elevated)',
+                      borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)',
+                    }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{c.name}</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 600, color: c.score >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        {c.score > 0 ? '+' : ''}{c.score} <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>/ {c.max}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{c.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Zone 4: Intelligence Split — 60/40 */}
+      <StaggerReveal style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 'var(--space-6)', marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
+        <motion.div className="card" variants={staggerItem}>
+          <div className="card-header">Average CM% per Category</div>
           <div className="card-body">
-            <ResponsiveContainer width="100%" height={250}>
+            <ResponsiveContainer width="100%" height={280}>
               <BarChart data={categoryData} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="category_name" tick={TICK_STYLE} />
-                <YAxis tick={TICK_STYLE} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Bar dataKey="avg_cm_pct" fill="var(--blue)" radius={[4, 4, 0, 0]} name="CM%" />
+                <XAxis dataKey="category" tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'Sora' }} />
+                <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+                <Tooltip cursor={{ fill: 'rgba(30,30,40,0.5)' }} contentStyle={chartTooltipStyle} />
+                <Bar dataKey="avg_cm_pct" fill="var(--accent)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </motion.div>
 
-        <div className="card">
-          <div className="card-header">⏰ Orders by Hour</div>
+        <motion.div variants={staggerItem} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+          <div className="card" style={{ flex: 1 }}>
+            <div className="card-header" style={{ color: 'var(--data-5)' }}>Hidden Gems</div>
+            <div className="card-body" style={{ padding: 0 }}>
+              {hiddenStars.length === 0 ? (
+                <div style={{ padding: 'var(--space-6)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>No hidden gems found.</div>
+              ) : hiddenStars.map(item => (
+                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-3) var(--space-6)', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.name}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--success)' }}>
+                    {formatPct(item.cm_percent || item.margin_pct)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="card" style={{ flex: 1 }}>
+            <div className="card-header" style={{ color: 'var(--danger)' }}>Underperformers</div>
+            <div className="card-body" style={{ padding: 0 }}>
+              {riskItems.length === 0 ? (
+                <div style={{ padding: 'var(--space-6)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>No items at risk.</div>
+              ) : riskItems.slice(0, 5).map(item => (
+                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-3) var(--space-6)', borderBottom: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.name}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--danger)' }}>
+                    {formatPct(item.cm_percent || item.margin_pct)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </motion.div>
+      </StaggerReveal>
+
+      {/* Peak Hours + Quadrant Drift */}
+      <StaggerReveal className="grid-2" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
+        <motion.div className="card" variants={staggerItem}>
+          <div className="card-header">Orders by Hour</div>
           <div className="card-body">
             {peakHours.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>No hourly data available.</div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--space-10)' }}>No hourly data available.</div>
             ) : (
               <ResponsiveContainer width="100%" height={250}>
-                <AreaChart data={[...peakHours].sort((a, b) => a.hour - b.hour)} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="label" tick={TICK_STYLE} />
-                  <YAxis tick={TICK_STYLE} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
-                  <Area type="monotone" dataKey="order_count" fill="rgba(139, 92, 246, 0.3)" stroke="var(--purple)" strokeWidth={2} name="Orders" />
-                </AreaChart>
+                <BarChart data={peakHours.sort((a, b) => a.hour - b.hour)} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
+                  <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+                  <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+                  <Tooltip contentStyle={chartTooltipStyle} />
+                  <Bar dataKey="order_count" fill="var(--data-5)" radius={[4, 4, 0, 0]} name="Orders" />
+                </BarChart>
               </ResponsiveContainer>
             )}
           </div>
-        </div>
-      </div>
+        </motion.div>
 
-      {/* ─── Charts Row 2: Revenue Pie + Orders by Type ─── */}
-      <div className="grid-2" style={{ marginBottom: 24 }}>
-        <div className="card">
-          <div className="card-header">🥧 Revenue by Category</div>
+        <motion.div className="card" variants={staggerItem}>
+          <div className="card-header" style={{ color: 'var(--warning)' }}>Quadrant Drift Alerts</div>
+          <div className="card-body">
+            {driftItems.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No significant quadrant shifts detected.</div>
+            ) : driftItems.slice(0, 5).map((item, i) => (
+              <div key={i} style={{ padding: 'var(--space-2) 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.name}</span>
+                  <span className={`tag ${item.drift_direction?.includes('dog') ? 'tag-red' : 'tag-amber'}`}>
+                    {item.drift_direction}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {item.drift_warning}  Pop: {item.popularity_trend_pct}% {item.trend_arrow}
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      </StaggerReveal>
+
+      {/* Revenue by Category Pie */}
+      <StaggerReveal className="grid-2" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
+        <motion.div className="card" variants={staggerItem}>
+          <div className="card-header">Revenue by Category</div>
           <div className="card-body" style={{ display: 'flex', justifyContent: 'center' }}>
             {categoryPieData.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: 40 }}>No data.</div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: 'var(--space-10)' }}>No data.</div>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
                   <Pie data={categoryPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                     {categoryPieData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
                   </Pie>
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => `₹${v.toLocaleString()}`} />
+                  <Tooltip contentStyle={chartTooltipStyle} formatter={(v) => formatRupees(v)} />
                 </PieChart>
               </ResponsiveContainer>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {metrics.orders_by_type?.length > 0 && (
-          <div className="card">
-            <div className="card-header">📦 Orders by Type (30d)</div>
+          <motion.div className="card" variants={staggerItem}>
+            <div className="card-header">Orders by Type (30d)</div>
             <div className="card-body">
-              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
                 {metrics.orders_by_type.map((t, i) => (
-                  <div key={i} style={{ flex: '1 1 80px', padding: 16, background: 'var(--surface2)', borderRadius: 8, textAlign: 'center' }}>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', textTransform: 'capitalize' }}>{t.type?.replace('_', ' ')}</div>
-                    <div style={{ fontSize: 22, fontWeight: 700 }}>{t.count}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>₹{t.revenue?.toLocaleString()}</div>
-                  </div>
+                  <motion.div key={i} style={{
+                    flex: '1 1 80px', padding: 'var(--space-4)', background: 'var(--bg-elevated)',
+                    borderRadius: 'var(--radius-md)', textAlign: 'center',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: i * 0.1, duration: 0.4 }}
+                    whileHover={{ scale: 1.03, transition: { duration: 0.15 } }}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      {t.type?.replace('_', ' ')}
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, color: 'var(--text-primary)', margin: '4px 0' }}>{t.count}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>{formatRupees(t.revenue)}</div>
+                  </motion.div>
                 ))}
               </div>
             </div>
-          </div>
+          </motion.div>
         )}
-      </div>
+      </StaggerReveal>
 
-      {/* ─── Quick Lists: Hidden Stars + Risk Items ─── */}
-      <div className="grid-2" style={{ marginBottom: 24 }}>
-        <div>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <div className="card-header" style={{ color: 'var(--purple)' }}>🔍 Top Hidden Stars</div>
-            <div className="card-body">
-              {hiddenStars.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No hidden stars found.</div> : hiddenStars.map((item, i) => (
-                <div key={item.item_id || i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: 13 }}>{item.name}</span>
-                  <div>
-                    <span style={{ fontSize: 12, color: 'var(--purple)', fontWeight: 600 }}>CM: {item.cm_percent || item.margin_pct}%</span>
-                    {item.estimated_monthly_uplift && (
-                      <span style={{ fontSize: 11, color: 'var(--green)', marginLeft: 8 }}>+₹{item.estimated_monthly_uplift.toLocaleString()}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-header" style={{ color: 'var(--red)' }}>⚠️ Top Risk Items</div>
-            <div className="card-body">
-              {riskItems.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No items at risk.</div> : riskItems.map((item, i) => (
-                <div key={item.item_id || i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: 13 }}>{item.name}</span>
-                  <div>
-                    <span style={{ fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>CM: {item.cm_percent || item.margin_pct}%</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>Risk: {item.risk_score}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Quadrant Drift Alerts */}
-        <div className="card">
-          <div className="card-header" style={{ color: 'var(--amber)' }}>📈 Quadrant Drift Alerts</div>
-          <div className="card-body">
-            {driftItems.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No significant quadrant shifts detected.</div>
-            ) : driftItems.slice(0, 6).map((item, i) => (
-              <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</span>
-                  <span style={{
-                    fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                    background: item.drift_direction?.includes('dog') ? 'var(--red)' : 'var(--amber)',
-                    color: '#fff',
-                  }}>
-                    {item.drift_direction}
-                  </span>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {item.drift_warning} • Pop: {item.popularity_trend_pct}% {item.trend_arrow}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ─── WoW / MoM Revenue Changes ─── */}
+      {/* WoW / MoM Revenue Changes */}
       {wowMom.length > 0 && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-header">📅 Week-over-Week / Month-over-Month Revenue Changes</div>
-          <div className="card-body">
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Item</th>
-                    <th>WoW Change</th>
-                    <th>MoM Change</th>
-                    <th>This Week Revenue</th>
-                    <th>Last Week Revenue</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {wowMom.map((item, i) => (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{item.name}</td>
-                      <td style={{ color: (item.wow_change_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
-                        {(item.wow_change_pct || 0) > 0 ? '+' : ''}{item.wow_change_pct?.toFixed(1) || '—'}%
-                      </td>
-                      <td style={{ color: (item.mom_change_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
-                        {(item.mom_change_pct || 0) > 0 ? '+' : ''}{item.mom_change_pct?.toFixed(1) || '—'}%
-                      </td>
-                      <td>₹{item.this_week_revenue?.toLocaleString() || '—'}</td>
-                      <td>₹{item.last_week_revenue?.toLocaleString() || '—'}</td>
+        <ScrollReveal variants={fadeInUp}>
+          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+            <div className="card-header">Week-over-Week / Month-over-Month Revenue Changes</div>
+            <div className="card-body">
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th>WoW Change</th>
+                      <th>MoM Change</th>
+                      <th>This Week Revenue</th>
+                      <th>Last Week Revenue</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {wowMom.map((item, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td style={{ color: (item.wow_change_pct || 0) >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
+                          {(item.wow_change_pct || 0) > 0 ? '+' : ''}{item.wow_change_pct?.toFixed(1) || '—'}%
+                        </td>
+                        <td style={{ color: (item.mom_change_pct || 0) >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
+                          {(item.mom_change_pct || 0) > 0 ? '+' : ''}{item.mom_change_pct?.toFixed(1) || '—'}%
+                        </td>
+                        <td>{formatRupees(item.this_week_revenue)}</td>
+                        <td>{formatRupees(item.last_week_revenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
+        </ScrollReveal>
       )}
 
-      {/* ─── Price Elasticity ─── */}
+      {/* Price Elasticity */}
       {elasticity.length > 0 && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-header">📐 Price Elasticity Estimates</div>
-          <div className="card-body">
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>Items where price changes affected demand volume.</p>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Item</th>
-                    <th>Price Change</th>
-                    <th>Volume Change</th>
-                    <th>Elasticity</th>
-                    <th>Classification</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {elasticity.map((item, i) => (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{item.name}</td>
-                      <td>{item.price_change_pct?.toFixed(1) || '—'}%</td>
-                      <td style={{ color: (item.volume_change_pct || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                        {item.volume_change_pct?.toFixed(1) || '—'}%
-                      </td>
-                      <td>{item.elasticity?.toFixed(2) || '—'}</td>
-                      <td>
-                        <span className={`tag tag-${item.classification === 'elastic' ? 'red' : item.classification === 'inelastic' ? 'green' : 'blue'}`}>
-                          {item.classification || '—'}
-                        </span>
-                      </td>
+        <ScrollReveal variants={fadeInUp}>
+          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+            <div className="card-header">Price Elasticity Estimates</div>
+            <div className="card-body">
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>Items where price changes affected demand volume.</p>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th>Price Change</th>
+                      <th>Volume Change</th>
+                      <th>Elasticity</th>
+                      <th>Classification</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {elasticity.map((item, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td>{item.price_change_pct?.toFixed(1) || '—'}%</td>
+                        <td style={{ color: (item.volume_change_pct || 0) >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                          {item.volume_change_pct?.toFixed(1) || '—'}%
+                        </td>
+                        <td>{item.elasticity?.toFixed(2) || '—'}</td>
+                        <td>
+                          <span className={`tag tag-${item.classification === 'elastic' ? 'red' : item.classification === 'inelastic' ? 'green' : 'blue'}`}>
+                            {item.classification || '—'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
+        </ScrollReveal>
       )}
 
-      {/* ─── Advanced Analytics: Cannibalization + Price Sensitivity ─── */}
-      <div className="grid-2" style={{ marginBottom: 24 }}>
+      {/* Cannibalization + Price Sensitivity */}
+      <div className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
         {cannibalization.length > 0 && (
           <div className="card">
-            <div className="card-header" style={{ color: 'var(--red)' }}>🔀 Cannibalization Alerts</div>
+            <div className="card-header" style={{ color: 'var(--danger)' }}>Cannibalization Alerts</div>
             <div className="card-body">
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>New items that may be eating into existing sales.</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>New items that may be eating into existing sales.</p>
               {cannibalization.map((item, i) => (
-                <div key={i} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                <div key={i} style={{ padding: 'var(--space-3) 0', borderBottom: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{item.new_item || item.name}</span>
-                    <span style={{ fontSize: 11, color: 'var(--red)', fontWeight: 600 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.new_item || item.name}</span>
+                    <span style={{ fontSize: 11, color: 'var(--danger)', fontWeight: 600 }}>
                       {item.cannibalization_pct?.toFixed(0) || item.overlap_pct?.toFixed(0) || '—'}% overlap
                     </span>
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                    Affected: {item.affected_item || item.victim || '—'} • {item.recommendation || ''}
+                    Affected: {item.affected_item || item.victim || '—'}  {item.recommendation || ''}
                   </div>
                 </div>
               ))}
@@ -392,19 +534,19 @@ export default function Dashboard() {
 
         {priceSensitivity.length > 0 && (
           <div className="card">
-            <div className="card-header" style={{ color: 'var(--amber)' }}>💲 Price Sensitivity — Plowhorse Items</div>
+            <div className="card-header" style={{ color: 'var(--warning)' }}>Price Sensitivity — Plowhorse Items</div>
             <div className="card-body">
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>High-volume, low-margin items that could absorb a price increase.</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>High-volume, low-margin items that could absorb a price increase.</p>
               {priceSensitivity.map((item, i) => (
-                <div key={i} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                <div key={i} style={{ padding: 'var(--space-3) 0', borderBottom: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green)' }}>
-                      +₹{item.projected_revenue_gain?.toLocaleString() || item.revenue_impact?.toLocaleString() || '—'}
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.name}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--success)' }}>
+                      +{formatRupees(item.projected_revenue_gain || item.revenue_impact)}
                     </span>
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                    Current: ₹{item.current_price} → Suggested: ₹{item.suggested_price || item.recommended_price || '—'} | {item.recommendation || ''}
+                    Current: {formatRupees(item.current_price)}  Suggested: {formatRupees(item.suggested_price || item.recommended_price)} | {item.recommendation || ''}
                   </div>
                 </div>
               ))}
@@ -413,29 +555,29 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* ─── Waste & Voids + Customer Returns ─── */}
-      <div className="grid-2" style={{ marginBottom: 24 }}>
+      {/* Waste & Voids + Customer Returns */}
+      <div className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
         {waste && (
           <div className="card">
-            <div className="card-header" style={{ color: 'var(--red)' }}>🗑️ Waste & Void Analysis (30d)</div>
+            <div className="card-header" style={{ color: 'var(--danger)' }}>Waste & Void Analysis (30d)</div>
             <div className="card-body">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                <div style={{ padding: 12, background: 'var(--surface2)', borderRadius: 8, textAlign: 'center' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total Waste Cost</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--red)' }}>₹{waste.total_waste_cost?.toLocaleString() || 0}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--danger)' }}>{formatRupees(waste.total_waste_cost)}</div>
                 </div>
-                <div style={{ padding: 12, background: 'var(--surface2)', borderRadius: 8, textAlign: 'center' }}>
+                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Void Rate</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--amber)' }}>{waste.void_rate_pct?.toFixed(1) || 0}%</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--warning)' }}>{waste.void_rate_pct?.toFixed(1) || 0}%</div>
                 </div>
               </div>
               {waste.top_voided_items?.length > 0 && (
                 <>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>Top Voided Items</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-2)', fontWeight: 600 }}>Top Voided Items</div>
                   {waste.top_voided_items.slice(0, 5).map((item, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: 'var(--space-2) 0', fontSize: 13, borderBottom: '1px solid var(--border-subtle)' }}>
                       <span>{item.name}</span>
-                      <span style={{ color: 'var(--red)', fontWeight: 600 }}>{item.void_count || item.count} voids</span>
+                      <span style={{ color: 'var(--danger)', fontWeight: 600 }}>{item.void_count || item.count} voids</span>
                     </div>
                   ))}
                 </>
@@ -446,23 +588,23 @@ export default function Dashboard() {
 
         {customerReturns && (
           <div className="card">
-            <div className="card-header" style={{ color: 'var(--green)' }}>🔄 Customer Return Rates</div>
+            <div className="card-header" style={{ color: 'var(--success)' }}>Customer Return Rates</div>
             <div className="card-body">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                <div style={{ padding: 12, background: 'var(--surface2)', borderRadius: 8, textAlign: 'center' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Repeat Rate</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--green)' }}>{customerReturns.repeat_rate_pct?.toFixed(1) || 0}%</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--success)' }}>{customerReturns.repeat_rate_pct?.toFixed(1) || 0}%</div>
                 </div>
-                <div style={{ padding: 12, background: 'var(--surface2)', borderRadius: 8, textAlign: 'center' }}>
+                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Unique Tables</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{customerReturns.unique_tables || customerReturns.unique_customers || 0}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>{customerReturns.unique_tables || customerReturns.unique_customers || 0}</div>
                 </div>
               </div>
               {customerReturns.top_returning_tables?.length > 0 && (
                 <>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>Most Frequent Tables</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-2)', fontWeight: 600 }}>Most Frequent Tables</div>
                   {customerReturns.top_returning_tables.slice(0, 5).map((t, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: 'var(--space-2) 0', fontSize: 13, borderBottom: '1px solid var(--border-subtle)' }}>
                       <span>{t.table_id || t.table || `Table ${i + 1}`}</span>
                       <span style={{ fontWeight: 600 }}>{t.visit_count || t.visits} visits</span>
                     </div>
@@ -474,51 +616,55 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* ─── Menu Complexity ─── */}
+      {/* Menu Complexity */}
       {menuComplexity.length > 0 && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-header">🧩 Menu Complexity by Category</div>
-          <div className="card-body">
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>Categories with more than 7 items may suffer from decision fatigue.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-              {menuComplexity.map((cat, i) => (
-                <div key={i} style={{
-                  padding: 16, background: 'var(--surface2)', borderRadius: 8,
-                  border: `1px solid ${cat.item_count > 7 || cat.alert ? 'var(--amber)' : 'var(--border)'}`,
-                }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{cat.category_name || cat.name}</div>
-                  <div style={{ fontSize: 22, fontWeight: 700 }}>{cat.item_count || cat.count}</div>
-                  <div style={{ fontSize: 11, color: (cat.item_count > 7 || cat.alert) ? 'var(--amber)' : 'var(--text-muted)' }}>
-                    {(cat.item_count > 7 || cat.alert) ? '⚠️ Consider trimming' : 'Optimal range'}
+        <ScrollReveal variants={fadeInUp}>
+          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+            <div className="card-header">Menu Complexity by Category</div>
+            <div className="card-body">
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>Categories with more than 7 items may suffer from decision fatigue.</p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--space-3)' }}>
+                {menuComplexity.map((cat, i) => (
+                  <div key={i} style={{
+                    padding: 'var(--space-4)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)',
+                    border: `1px solid ${cat.item_count > 7 || cat.alert ? 'var(--warning)' : 'var(--border-subtle)'}`,
+                  }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: 'var(--text-primary)' }}>{cat.category_name || cat.name}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>{cat.item_count || cat.count}</div>
+                    <div style={{ fontSize: 11, color: (cat.item_count > 7 || cat.alert) ? 'var(--warning)' : 'var(--text-muted)' }}>
+                      {(cat.item_count > 7 || cat.alert) ? ' Consider trimming' : 'Optimal range'}
+                    </div>
+                    {cat.complexity_score != null && (
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Score: {cat.complexity_score}</div>
+                    )}
                   </div>
-                  {cat.complexity_score != null && (
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Score: {cat.complexity_score}</div>
-                  )}
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        </ScrollReveal>
       )}
 
-      {/* ─── Seasonal Patterns ─── */}
+      {/* Seasonal Patterns */}
       {seasonalPatterns.length > 0 && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="card-header">🌦️ Seasonal / Day-of-Week Patterns</div>
-          <div className="card-body">
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={seasonalPatterns} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="day" tick={TICK_STYLE} />
-                <YAxis tick={TICK_STYLE} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Bar dataKey="avg_revenue" fill="var(--amber)" radius={[4, 4, 0, 0]} name="Avg Revenue" />
-                <Bar dataKey="avg_orders" fill="var(--blue)" radius={[4, 4, 0, 0]} name="Avg Orders" />
-              </BarChart>
-            </ResponsiveContainer>
+        <ScrollReveal variants={fadeInUp}>
+          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+            <div className="card-header">Seasonal / Day-of-Week Patterns</div>
+            <div className="card-body">
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={seasonalPatterns} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                  <XAxis dataKey="day" tick={TICK_STYLE} />
+                  <YAxis tick={TICK_STYLE} />
+                  <Tooltip contentStyle={chartTooltipStyle} />
+                  <Bar dataKey="avg_revenue" fill="var(--warning)" radius={[4, 4, 0, 0]} name="Avg Revenue" />
+                  <Bar dataKey="avg_orders" fill="var(--info)" radius={[4, 4, 0, 0]} name="Avg Orders" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
-        </div>
+        </ScrollReveal>
       )}
-    </div>
+    </motion.div>
   )
 }

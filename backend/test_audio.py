@@ -11,7 +11,7 @@ audio_path = r"C:\Users\Pranshul Soni\Documents\Projects\pet-pooja\audio\Recordi
 
 db = SessionLocal()
 items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
-pipeline = VoicePipeline(db_session=db, menu_items=items)
+pipeline = VoicePipeline(menu_items=items)
 
 print(f"Testing audio: {audio_path}")
 print(f"Menu items loaded: {len(items)}")

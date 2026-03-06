@@ -10,11 +10,9 @@ import logging
 import threading
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 from database import get_db
 from models import MenuItem, SaleTransaction, Category
@@ -42,9 +40,6 @@ from modules.revenue.advanced_analytics import (
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.revenue")
 
-# Rate limiter instance
-_limiter = Limiter(key_func=get_remote_address)
-
 # ── Thread-safe cache for expensive computations ──
 _cache_lock = threading.Lock()
 _cache: dict = {}
@@ -53,7 +48,8 @@ _CACHE_TTL = 300  # 5 minutes
 
 def _get_cached(key: str):
     """Return cached value if still valid, else None."""
-    entry = _cache.get(key)
+    with _cache_lock:
+        entry = _cache.get(key)
     if entry and time.time() - entry["ts"] < _CACHE_TTL:
         return entry["data"]
     return None
@@ -115,7 +111,7 @@ def get_dashboard(db: Session = Depends(get_db)):
         items_at_risk = sum(
             1 for m in matrix
             if m.get("quadrant") == "dog" or (
-                m.get("margin_pct", 100) < 40 and m.get("popularity_score", 0) > 50
+                m.get("margin_pct", 100) < 40 and m.get("popularity_score", 0) > 0.5
             )
         )
 
@@ -210,8 +206,8 @@ def get_risk_items(db: Session = Depends(get_db)):
             cm = item.get("margin_pct", 100)
             pop = item.get("popularity_score", 0)
 
-            if cm < 40 and pop > 50:
-                risk_score = round((100 - cm) * (pop / 100), 1)
+            if cm < 40 and pop > 0.5:
+                risk_score = round((100 - cm) * pop, 1)
                 risk_items.append({
                     **item,
                     "risk_score": risk_score,
@@ -248,9 +244,7 @@ def get_combo_suggestions(
 
 
 @router.post("/combos/retrain")
-@_limiter.limit("2/minute")
 def retrain_combos(
-    request: Request,
     db: Session = Depends(get_db),
     discount_pct: float = Query(10.0, ge=1.0, le=30.0, description="Target discount percentage"),
 ):

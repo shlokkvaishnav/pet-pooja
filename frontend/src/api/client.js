@@ -94,4 +94,42 @@ export const confirmOrder = (order, kot) =>
 export const getVoiceOrders = () =>
   api.get('/voice/orders').then(r => r.data)
 
+// —— Operations ——
+
+export const getOpsOrders = (params = {}) =>
+  api.get('/ops/orders', { params }).then(r => r.data)
+
+export const getOpsTables = () =>
+  api.get('/ops/tables').then(r => r.data)
+
+export const getOpsTablesFiltered = (params = {}) =>
+  api.get('/ops/tables', { params }).then(r => r.data)
+
+export const getOpsInventory = (days = 30) =>
+  api.get('/ops/inventory', { params: { days } }).then(r => r.data)
+
+export const getOpsInventoryFiltered = (params = {}) =>
+  api.get('/ops/inventory', { params }).then(r => r.data)
+
+export const getOpsReports = (days = 14) =>
+  api.get('/ops/reports', { params: { days } }).then(r => r.data)
+
+export const getOpsReportsFiltered = (params = {}) =>
+  api.get('/ops/reports', { params }).then(r => r.data)
+
+export const getOpsSettings = () =>
+  api.get('/ops/settings').then(r => r.data)
+
+export const updateTableStatus = (tableId, payload) =>
+  api.patch(`/ops/tables/${tableId}`, payload).then(r => r.data)
+
+export const adjustInventory = (payload) =>
+  api.post('/ops/inventory/adjust', payload).then(r => r.data)
+
+export const updateIngredient = (ingredientId, payload) =>
+  api.patch(`/ops/inventory/${ingredientId}`, payload).then(r => r.data)
+
+export const exportReportsCsv = (params = {}) =>
+  api.get('/ops/reports/export', { params, responseType: 'blob' }).then(r => r.data)
+
 export default api

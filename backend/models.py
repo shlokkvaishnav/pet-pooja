@@ -110,6 +110,10 @@ class Category(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), unique=True, nullable=False)
     name_hi = Column(String(100))  # Hindi name
+    name_mr = Column(String(100))  # Marathi name
+    name_kn = Column(String(100))  # Kannada name
+    name_gu = Column(String(100))  # Gujarati name
+    name_hi_en = Column(String(100))  # Hinglish name
     display_order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
 
@@ -124,6 +128,10 @@ class MenuItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), nullable=False)
     name_hi = Column(String(200))  # Hindi name
+    name_mr = Column(String(200))  # Marathi name
+    name_kn = Column(String(200))  # Kannada name
+    name_gu = Column(String(200))  # Gujarati name
+    name_hi_en = Column(String(200))  # Hinglish name
     description = Column(Text)
     aliases = Column(Text, default="")  # pipe-separated: "pnr tikka|panir tikka|tikka paneer"
     category_id = Column(Integer, ForeignKey("categories.id"))

@@ -66,9 +66,9 @@ export default function Navbar() {
             {/* Centre links */}
             <div className="lp-nav-links">
                 <a
-                    href="/#features"
+                    href="/product"
                     className="lp-nav-link"
-                    onClick={(e) => { e.preventDefault(); goToSection('features') }}
+                    onClick={(e) => { e.preventDefault(); navigate('/product') }}
                 >
                     {t('nav_product')}
                 </a>
@@ -78,13 +78,6 @@ export default function Navbar() {
                     onClick={(e) => { e.preventDefault(); navigate('/about') }}
                 >
                     {t('nav_about')}
-                </a>
-                <a
-                    href="/#contact"
-                    className="lp-nav-link"
-                    onClick={(e) => { e.preventDefault(); goToSection('contact') }}
-                >
-                    {t('nav_contact')}
                 </a>
             </div>
 
