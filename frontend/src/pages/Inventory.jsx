@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { adjustInventory, getOpsInventoryFiltered, updateIngredient } from '../api/client'
 import { formatRupees } from '../utils/format'
-import { motion } from 'motion/react'
+import { motion, AnimatePresence } from 'motion/react'
 import { INVENTORY_PAGE_LIMIT } from '../config'
 
 function formatDelta(current, previous) {
@@ -28,6 +28,7 @@ export default function Inventory() {
   const [lowOnly, setLowOnly] = useState(false)
   const [page, setPage] = useState(1)
   const [updates, setUpdates] = useState({})
+  const [openCategory, setOpenCategory] = useState(null)
   const [showMovementModal, setShowMovementModal] = useState(false)
   const [movementLoading, setMovementLoading] = useState(false)
   const [error, setError] = useState('')
@@ -85,7 +86,7 @@ export default function Inventory() {
   if (loading) return <div className="loading">Loading inventory...</div>
   if (!data) return <div className="loading">Failed to load inventory.</div>
 
-  const { summary, low_stock, ingredients, total } = data
+  const { summary, ingredients, total } = data
   const totalPages = Math.max(1, Math.ceil((total || summary.total_ingredients || 0) / limit))
   const prevEstimate = summary.stock_value_prev_estimate || 0
   const stockTrendPositive = (summary.total_stock_value || 0) >= prevEstimate
@@ -120,33 +121,6 @@ export default function Inventory() {
       ) : null}
 
       <div className="card">
-        <div className="card-header">Low Stock Alerts</div>
-        <div className="card-body">
-          {low_stock.length === 0 ? (
-            <div className="inventory-success-empty">
-              <span className="inventory-success-icon">✓</span>
-              <div>
-                <div className="inventory-success-title">All ingredients well-stocked</div>
-                <div className="inventory-success-sub">No low-stock alerts right now.</div>
-              </div>
-            </div>
-          ) : (
-            <div className="alert-list">
-              {low_stock.map((i) => (
-                <div key={i.ingredient_id} className="alert-row">
-                  <div>
-                    <div className="alert-title">{i.name}</div>
-                    <div className="alert-sub">Reorder at {i.reorder_level} {i.unit}</div>
-                  </div>
-                  <div className="alert-value">{i.current_stock} {i.unit}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="card">
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Filters</span>
           <button className="btn btn-primary" onClick={() => setShowMovementModal(true)}>
@@ -178,81 +152,136 @@ export default function Inventory() {
         })
         const sortedGroups = Object.keys(grouped).sort((a, b) => a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b))
 
-        return sortedGroups.map((cat) => (
-          <div className="card" key={cat} style={{ marginBottom: 'var(--space-4)' }}>
-            <div className="card-header">{cat}</div>
-            <div className="card-body">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 'var(--space-3)' }}>
-                {grouped[cat].map((i) => {
-                  const isLow = i.current_stock <= i.reorder_level
-                  return (
-                    <div
-                      key={i.ingredient_id}
+        return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+            {sortedGroups.map((cat) => {
+              const items = grouped[cat]
+              const hasLow = items.some((i) => i.current_stock <= i.reorder_level)
+              const isOpen = openCategory === cat
+
+              return (
+                <div
+                  key={cat}
+                  style={{
+                    flex: isOpen ? '1 1 100%' : '0 0 auto',
+                    order: isOpen ? -1 : 0,
+                    transition: 'flex 0.3s',
+                  }}
+                >
+                  <div
+                    onClick={() => setOpenCategory(isOpen ? null : cat)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '10px 18px',
+                      borderRadius: 'var(--radius-lg)',
+                      border: `1.5px solid ${hasLow ? 'var(--danger)' : 'var(--success)'}`,
+                      background: hasLow ? 'rgba(217,72,65,0.07)' : 'rgba(42,122,80,0.07)',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      transition: 'background 0.2s, border-color 0.2s',
+                    }}
+                  >
+                    <span
                       style={{
-                        border: `1px solid ${isLow ? 'var(--danger)' : 'var(--border-subtle)'}`,
-                        borderRadius: 'var(--radius-lg)',
-                        padding: 'var(--space-4)',
-                        background: isLow ? 'rgba(140,42,42,0.06)' : 'var(--bg-surface)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: hasLow ? 'var(--danger)' : 'var(--success)',
+                        flexShrink: 0,
                       }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontWeight: 700, fontSize: 13 }}>{i.name}</span>
-                        {isLow && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--danger)', textTransform: 'uppercase' }}>Low</span>}
-                      </div>
-                      <StockBar current={i.current_stock} reorder={i.reorder_level} />
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)' }}>
-                        <span>{i.current_stock} {i.unit}</span>
-                        <span>Reorder: {i.reorder_level}</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                        Cost: {formatRupees(i.cost_per_unit)}/{i.unit}
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                        <input
-                          className="input input-sm"
-                          type="number"
-                          step="0.01"
-                          placeholder="Reorder"
-                          style={{ flex: 1, fontSize: 11 }}
-                          value={updates[i.ingredient_id]?.reorder_level ?? ''}
-                          onChange={(e) => setUpdates((prev) => ({
-                            ...prev,
-                            [i.ingredient_id]: { ...prev[i.ingredient_id], reorder_level: e.target.value },
-                          }))}
-                        />
-                        <input
-                          className="input input-sm"
-                          type="number"
-                          step="0.01"
-                          placeholder="Cost"
-                          style={{ flex: 1, fontSize: 11 }}
-                          value={updates[i.ingredient_id]?.cost_per_unit ?? ''}
-                          onChange={(e) => setUpdates((prev) => ({
-                            ...prev,
-                            [i.ingredient_id]: { ...prev[i.ingredient_id], cost_per_unit: e.target.value },
-                          }))}
-                        />
-                        <button
-                          className="btn btn-ghost"
-                          style={{ fontSize: 11, padding: '4px 8px' }}
-                          onClick={() => updateIngredient(i.ingredient_id, {
-                            reorder_level: updates[i.ingredient_id]?.reorder_level !== undefined ? Number(updates[i.ingredient_id].reorder_level) : undefined,
-                            cost_per_unit: updates[i.ingredient_id]?.cost_per_unit !== undefined ? Number(updates[i.ingredient_id].cost_per_unit) : undefined,
-                          }).then(() => getOpsInventoryFiltered(params).then(setData))}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
+                    />
+                    <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>{cat}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>({items.length})</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▼</span>
+                  </div>
+
+                  <AnimatePresence>
+                    {isOpen && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.25 }}
+                        style={{ overflow: 'hidden', marginTop: 'var(--space-3)' }}
+                      >
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 'var(--space-3)' }}>
+                          {items.map((i) => {
+                            const isLow = i.current_stock <= i.reorder_level
+                            return (
+                              <div
+                                key={i.ingredient_id}
+                                style={{
+                                  border: `1px solid ${isLow ? 'var(--danger)' : 'var(--border-subtle)'}`,
+                                  borderRadius: 'var(--radius-lg)',
+                                  padding: 'var(--space-4)',
+                                  background: isLow ? 'rgba(140,42,42,0.06)' : 'var(--bg-surface)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 8,
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontWeight: 700, fontSize: 13 }}>{i.name}</span>
+                                  {isLow && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--danger)', textTransform: 'uppercase' }}>Low</span>}
+                                </div>
+                                <StockBar current={i.current_stock} reorder={i.reorder_level} />
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)' }}>
+                                  <span>{i.current_stock} {i.unit}</span>
+                                  <span>Reorder: {i.reorder_level}</span>
+                                </div>
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                  Cost: {formatRupees(i.cost_per_unit)}/{i.unit}
+                                </div>
+                                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                                  <input
+                                    className="input input-sm"
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="Reorder"
+                                    style={{ flex: 1, fontSize: 11 }}
+                                    value={updates[i.ingredient_id]?.reorder_level ?? ''}
+                                    onChange={(e) => setUpdates((prev) => ({
+                                      ...prev,
+                                      [i.ingredient_id]: { ...prev[i.ingredient_id], reorder_level: e.target.value },
+                                    }))}
+                                  />
+                                  <input
+                                    className="input input-sm"
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="Cost"
+                                    style={{ flex: 1, fontSize: 11 }}
+                                    value={updates[i.ingredient_id]?.cost_per_unit ?? ''}
+                                    onChange={(e) => setUpdates((prev) => ({
+                                      ...prev,
+                                      [i.ingredient_id]: { ...prev[i.ingredient_id], cost_per_unit: e.target.value },
+                                    }))}
+                                  />
+                                  <button
+                                    className="btn btn-ghost"
+                                    style={{ fontSize: 11, padding: '4px 8px' }}
+                                    onClick={() => updateIngredient(i.ingredient_id, {
+                                      reorder_level: updates[i.ingredient_id]?.reorder_level !== undefined ? Number(updates[i.ingredient_id].reorder_level) : undefined,
+                                      cost_per_unit: updates[i.ingredient_id]?.cost_per_unit !== undefined ? Number(updates[i.ingredient_id].cost_per_unit) : undefined,
+                                    }).then(() => getOpsInventoryFiltered(params).then(setData))}
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )
+            })}
           </div>
-        ))
+        )
       })()}
 
       <div className="pagination">

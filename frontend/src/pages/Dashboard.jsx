@@ -406,7 +406,7 @@ export default function Dashboard() {
                 <BarChart data={hourlyOrders} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={CHART_TOOLTIP} cursor={false} formatter={(value) => [`${value} orders`, 'Orders']} />
+                  <Tooltip contentStyle={CHART_TOOLTIP} cursor={false} formatter={(value) => [`${value} orders`, 'Orders']} labelFormatter={() => ''} />
                   <Bar dataKey="orders" radius={[6, 6, 0, 0]}>
                     {hourlyOrders.map((_, index) => (
                       <Cell key={index} fill={barColorByRank(index, hourlyOrders.length)} />

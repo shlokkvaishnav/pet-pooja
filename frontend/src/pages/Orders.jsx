@@ -60,6 +60,15 @@ export default function Orders() {
   const refreshOrders = () => getOpsOrders({ ...params, _t: Date.now() }).then(setData)
 
   useEffect(() => {
+    setLoading(true)
+    setError('')
+    getOpsOrders(params)
+      .then(setData)
+      .catch((err) => setError(err?.detail || err?.message || 'Failed to load orders'))
+      .finally(() => setLoading(false))
+  }, [params])
+
+  const handleViewOrder = async (orderId) => {
     setBusyOrderId(orderId)
     setError('')
     try {
@@ -204,9 +213,6 @@ export default function Orders() {
           <p className="app-hero-sub">Live order flow and status monitoring.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <button className="btn btn-ghost" onClick={() => navigate('/dashboard/voice-order')}>
-            Voice Order
-          </button>
           <div className="app-hero-metrics">
             <div className="app-kpi">
               <div className="app-kpi-label">Total Orders (30d)</div>

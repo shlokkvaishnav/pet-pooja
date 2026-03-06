@@ -2,7 +2,8 @@
 Migration: Add 'category' column to ingredients and populate it.
 Run once: python migrate_ingredient_categories.py
 """
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from database import engine, SessionLocal
