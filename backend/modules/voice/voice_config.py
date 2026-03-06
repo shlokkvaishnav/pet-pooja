@@ -50,7 +50,7 @@ class VoiceConfig:
     # ─── STT (stt.py) ────────────────────────────────────────────
     WHISPER_MODEL: str            = _env("WHISPER_MODEL", "large-v3-turbo")
     STT_MIN_CONFIDENCE: float     = _env_float("STT_MIN_CONFIDENCE", 0.45)
-    STT_BEAM_SIZE: int            = _env_int("STT_BEAM_SIZE", 5)
+    STT_BEAM_SIZE: int            = _env_int("STT_BEAM_SIZE", 1)  # greedy decoding — 3-5x faster than beam=5
     STT_TEMPERATURE: float        = _env_float("STT_TEMPERATURE", 0.0)
     STT_VAD_FILTER: bool          = _env_bool("STT_VAD_FILTER", False)
     STT_CONDITION_ON_PREV: bool   = _env_bool("STT_CONDITION_ON_PREV", False)
@@ -112,10 +112,15 @@ class VoiceConfig:
     LLM_ENABLED: bool             = _env_bool("LLM_ENABLED", True)
     LLM_BASE_URL: str             = _env("LLM_BASE_URL", "http://localhost:11434")
     LLM_MODEL: str                = _env("LLM_MODEL", "qwen2.5:7b-instruct-q4_K_M")
-    LLM_TIMEOUT_SEC: float        = _env_float("LLM_TIMEOUT_SEC", 2.5)
-    LLM_MAX_TOKENS: int           = _env_int("LLM_MAX_TOKENS", 60)
-    LLM_TEMPERATURE: float        = _env_float("LLM_TEMPERATURE", 0.4)
+    LLM_TIMEOUT_SEC: float        = _env_float("LLM_TIMEOUT_SEC", 1.5)  # tighter timeout for speed
+    LLM_MAX_TOKENS: int           = _env_int("LLM_MAX_TOKENS", 50)     # shorter responses
+    LLM_TEMPERATURE: float        = _env_float("LLM_TEMPERATURE", 0.3)
     LLM_MIN_ITEMS_FOR_SUMMARY: int = _env_int("LLM_MIN_ITEMS_FOR_SUMMARY", 5)
+
+    # ─── LLM Brain (edge-case fallbacks — tighter budgets than response LLM) ─
+    LLM_BRAIN_TIMEOUT_SEC: float  = _env_float("LLM_BRAIN_TIMEOUT_SEC", 1.2)
+    LLM_BRAIN_MAX_TOKENS: int     = _env_int("LLM_BRAIN_MAX_TOKENS", 80)
+    LLM_BRAIN_MAX_CALLS: int      = _env_int("LLM_BRAIN_MAX_CALLS", 1)  # max LLM brain calls per pipeline run
 
 
 # Module-level singleton — import this everywhere

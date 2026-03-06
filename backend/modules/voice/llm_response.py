@@ -57,18 +57,15 @@ class LLMResponseGenerator:
         Returns True when templates would produce unnatural output:
         - 5+ matched items (too long to list by name)
         - QUERY intent (customer asking about a dish)
-        - Upsell suggestions present (need persuasive framing)
-        - Ambiguous match with 3+ options
-        - Partial order (some matched, some unrecognized)
+
+        IMPORTANT: For speed, we default to templates for most cases.
+        LLM is only used when templates literally cannot handle it.
         """
         if not cfg.LLM_ENABLED:
             return False
 
         items = pipeline_result.get("items", [])
         intent = pipeline_result.get("intent", "")
-        upsells = pipeline_result.get("upsell_suggestions", [])
-        disambiguation = pipeline_result.get("disambiguation", [])
-        stage_results = pipeline_result.get("stage_results", [])
 
         # 5+ items — too many to list naturally
         if len(items) >= cfg.LLM_MIN_ITEMS_FOR_SUMMARY:
@@ -78,23 +75,7 @@ class LLMResponseGenerator:
         if intent == "QUERY":
             return True
 
-        # Upsell — needs persuasive framing
-        if upsells:
-            return True
-
-        # 3+ disambiguation options — hard to template naturally
-        if len(disambiguation) >= 3:
-            return True
-
-        # Partial order — some matched, some failed
-        has_items = len(items) > 0
-        has_errors = any(
-            sr.get("error_type") == "zero_item_matches"
-            for sr in stage_results
-        )
-        if has_items and has_errors:
-            return True
-
+        # Everything else: use fast templates (upsell, disambiguation, etc.)
         return False
 
     # ── LLM Call ──────────────────────────────────────────────────
@@ -244,7 +225,18 @@ class LLMResponseGenerator:
             # Use session_order (accumulated cart) — order is only current turn's items
             session_order = pipeline_result.get("session_order")
             confirm_order = session_order or order
-            total = confirm_order.get("subtotal", 0) if confirm_order else 0
+            total = 0
+            if confirm_order:
+                total = confirm_order.get("total") or confirm_order.get("subtotal") or 0
+            # Robust fallback: compute from session_items if total is still 0
+            if not total:
+                session_items = pipeline_result.get("session_items", [])
+                if session_items:
+                    total = sum(
+                        i.get("line_total", 0)
+                        or (i.get("unit_price", 0) * i.get("quantity", 1))
+                        for i in session_items
+                    )
             return self._t_confirm(lang, total)
 
         # Disambiguation

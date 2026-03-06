@@ -68,6 +68,36 @@ def _run_auto_migrations(eng):
                 # Column may already exist (SQLite has no IF NOT EXISTS for columns)
                 logger.debug("Column %s.%s skipped: %s", table.name, col.name, exc)
 
+    # ── Fix column type mismatches ──────────────────────────────────────
+    # restaurant_tables.current_order_id should be INTEGER referencing
+    # orders.id (integer PK) for better join performance.
+    # The seed script already creates it as INTEGER.  If an older DB has
+    # it as VARCHAR, convert it back to INTEGER.
+    if is_pg:
+        try:
+            with eng.begin() as conn:
+                # Drop any stale FK constraint (either naming convention)
+                conn.execute(text(
+                    'ALTER TABLE "restaurant_tables" '
+                    'DROP CONSTRAINT IF EXISTS "restaurant_tables_current_order_id_fkey"'
+                ))
+                conn.execute(text(
+                    'ALTER TABLE "restaurant_tables" '
+                    'DROP CONSTRAINT IF EXISTS "fk_tables_current_order"'
+                ))
+                conn.execute(text(
+                    'ALTER TABLE "restaurant_tables" '
+                    'ALTER COLUMN "current_order_id" TYPE INTEGER USING "current_order_id"::INTEGER'
+                ))
+                conn.execute(text(
+                    'ALTER TABLE "restaurant_tables" '
+                    'ADD CONSTRAINT "fk_tables_current_order" '
+                    'FOREIGN KEY ("current_order_id") REFERENCES orders(id) ON DELETE SET NULL'
+                ))
+                logger.info("Migration: ensured restaurant_tables.current_order_id → INTEGER FK to orders(id)")
+        except Exception as exc:
+            logger.debug("current_order_id type migration skipped: %s", exc)
+
 
 def _background_warmup(app_state):
     """Run heavy ML model warmups in a background thread so the server

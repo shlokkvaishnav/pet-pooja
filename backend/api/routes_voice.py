@@ -2,14 +2,16 @@
 routes_voice.py — Voice Ordering API Endpoints
 ================================================
 /api/voice/* — Transcription, full pipeline processing,
-order confirmation, and order history.
+order confirmation, order history, and WebSocket streaming.
 """
 
+import asyncio
+import json
 import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
@@ -32,6 +34,7 @@ _AUDIO_READ_CHUNK_SIZE = 1024 * 1024
 class TextInput(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
     session_id: str | None = None
+    restaurant_id: int | None = None
 
 
 class ConfirmOrderInput(BaseModel):
@@ -160,34 +163,53 @@ async def process_audio(
     audio: UploadFile = File(...),
     session_id: str = Form(None),
     language: str = Form(None),
+    restaurant_id: int = Form(None),
     pipeline=Depends(get_voice_pipeline),
 ):
     """
     Full pipeline: audio → transcript → parsed order → upsell suggestions.
     Returns: {transcript, intent, items, order, upsell_suggestions}
     """
+    import time as _time
+    t0 = _time.perf_counter()
+
     audio_path = await _save_audio_temp(audio)
     try:
-        import asyncio
         result = await asyncio.to_thread(
             pipeline.process_audio, audio_path,
             session_id=session_id,
             language_hint=language or None,
+            restaurant_id=restaurant_id,
         )
 
-        # TTS enhancement — non-blocking, degrades gracefully on failure
+        t_pipeline = _time.perf_counter() - t0
+
+        # TTS enhancement — with timeout to prevent TTS from blocking response
         tts_result = {"audio_b64": None, "spoken_text": None, "language": result.get("detected_language", "en")}
         if cfg.TTS_ENABLED:
             try:
                 from modules.voice.tts import tts_orchestrator
                 detected_lang = result.get("detected_language", "en")
-                tts_result = await tts_orchestrator.get_audio_response(result, detected_lang)
+                t_tts_start = _time.perf_counter()
+                tts_result = await asyncio.wait_for(
+                    tts_orchestrator.get_audio_response(result, detected_lang),
+                    timeout=3.0,  # hard cap TTS at 3s
+                )
+                t_tts = _time.perf_counter() - t_tts_start
+                logger.info("⏱ TTS completed in %.1fms", t_tts * 1000)
+            except asyncio.TimeoutError:
+                logger.warning("TTS timed out (3s cap) — returning without audio")
             except Exception as e:
                 logger.warning(f"TTS enhancement failed: {e}")
 
         result["tts_audio_b64"] = tts_result["audio_b64"]
         result["tts_text"] = tts_result["spoken_text"]
         result["tts_language"] = tts_result["language"]
+
+        total_ms = (_time.perf_counter() - t0) * 1000
+        result["total_time_ms"] = round(total_ms, 1)
+        logger.info("⏱ Total /process-audio in %.1fms (pipeline=%.1fms)",
+                     total_ms, t_pipeline * 1000)
 
         return result
     except FileNotFoundError:
@@ -219,21 +241,34 @@ async def process_text(
     Returns: same as /process-audio but from text input
     """
     try:
-        result = pipeline.process_text(body.text, session_id=body.session_id)
+        import time as _time
+        t0 = _time.perf_counter()
 
-        # TTS enhancement — non-blocking, degrades gracefully on failure
+        result = pipeline.process_text(body.text, session_id=body.session_id,
+                                       restaurant_id=body.restaurant_id)
+
+        # TTS enhancement — with timeout cap
         tts_result = {"audio_b64": None, "spoken_text": None, "language": result.get("detected_language", "en")}
         if cfg.TTS_ENABLED:
             try:
                 from modules.voice.tts import tts_orchestrator
                 detected_lang = result.get("detected_language", "en")
-                tts_result = await tts_orchestrator.get_audio_response(result, detected_lang)
+                tts_result = await asyncio.wait_for(
+                    tts_orchestrator.get_audio_response(result, detected_lang),
+                    timeout=3.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("TTS timed out (3s cap) — returning without audio")
             except Exception as e:
                 logger.warning(f"TTS enhancement failed: {e}")
 
         result["tts_audio_b64"] = tts_result["audio_b64"]
         result["tts_text"] = tts_result["spoken_text"]
         result["tts_language"] = tts_result["language"]
+
+        total_ms = (_time.perf_counter() - t0) * 1000
+        result["total_time_ms"] = round(total_ms, 1)
+        logger.info("⏱ Total /process in %.1fms", total_ms)
 
         return result
     except ValueError as e:
@@ -373,6 +408,232 @@ async def voice_order_legacy(
     except Exception as e:
         logger.exception("Legacy voice order failed")
         raise HTTPException(status_code=500, detail=f"Voice order failed: {e}")
+
+
+# ── 7. WebSocket /api/voice/stream — Real-time Voice Streaming ──
+
+class _AudioBuffer:
+    """Accumulates audio chunks and detects end-of-utterance via silence."""
+
+    def __init__(self, silence_threshold_ms: int = 1500, max_buffer_ms: int = 15000):
+        self._chunks: list[bytes] = []
+        self._total_bytes: int = 0
+        self._silence_ms = silence_threshold_ms
+        self._max_ms = max_buffer_ms
+        self._last_chunk_time: float = 0
+        self._started: bool = False
+        import time
+        self._time = time
+
+    def append(self, chunk: bytes):
+        self._chunks.append(chunk)
+        self._total_bytes += len(chunk)
+        self._last_chunk_time = self._time.time()
+        if not self._started:
+            self._started = True
+
+    def is_end_of_utterance(self) -> bool:
+        """True if enough silence has passed since the last chunk arrived."""
+        if not self._started or not self._chunks:
+            return False
+        elapsed_ms = (self._time.time() - self._last_chunk_time) * 1000
+        return elapsed_ms >= self._silence_ms
+
+    def is_max_reached(self) -> bool:
+        """True if we've accumulated too much audio."""
+        # Rough estimate: 16kHz mono 16-bit = 32KB/sec
+        return self._total_bytes > (self._max_ms / 1000) * 32000
+
+    def flush(self) -> bytes:
+        """Return accumulated audio and reset buffer."""
+        data = b"".join(self._chunks)
+        self._chunks.clear()
+        self._total_bytes = 0
+        self._started = False
+        return data
+
+    @property
+    def has_data(self) -> bool:
+        return self._total_bytes > 0
+
+
+@router.websocket("/stream")
+async def voice_stream(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time voice streaming.
+
+    Client sends:
+    - Binary frames: raw audio chunks (PCM/WebM, ~250ms each)
+    - JSON text frames: control messages
+        {"type": "config", "session_id": "...", "language": "hi", "restaurant_id": 1}
+        {"type": "interrupt"}  — cancel in-progress processing
+        {"type": "end"}       — signal end of utterance manually
+
+    Server sends JSON text frames:
+        {"type": "partial_transcript", "text": "butter na...", "is_final": false}
+        {"type": "final_transcript", "text": "butter naan aur dal", "is_final": true}
+        {"type": "pipeline_result", ...full pipeline result...}
+        {"type": "tts_chunk", "audio_b64": "...", "is_last": true/false}
+        {"type": "error", "detail": "..."}
+    """
+    await websocket.accept()
+    logger.info("WebSocket voice stream connected")
+
+    # Session config
+    session_id = None
+    language = None
+    restaurant_id = None
+    audio_buf = _AudioBuffer()
+    processing = False
+
+    # Get pipeline from app state
+    pipeline = getattr(websocket.app.state, "voice_pipeline", None)
+    if pipeline is None:
+        await websocket.send_json({"type": "error", "detail": "Voice pipeline not loaded"})
+        await websocket.close(code=1011)
+        return
+
+    try:
+        while True:
+            msg = await websocket.receive()
+
+            # Text frame → control message
+            if "text" in msg:
+                try:
+                    data = json.loads(msg["text"])
+                except json.JSONDecodeError:
+                    await websocket.send_json({"type": "error", "detail": "Invalid JSON"})
+                    continue
+
+                msg_type = data.get("type", "")
+
+                if msg_type == "config":
+                    session_id = data.get("session_id", session_id)
+                    language = data.get("language", language)
+                    restaurant_id = data.get("restaurant_id", restaurant_id)
+                    await websocket.send_json({"type": "config_ack", "session_id": session_id})
+
+                elif msg_type == "interrupt":
+                    audio_buf.flush()
+                    processing = False
+                    await websocket.send_json({"type": "interrupted"})
+
+                elif msg_type == "end":
+                    # Manual end-of-utterance signal
+                    if audio_buf.has_data and not processing:
+                        processing = True
+                        await _process_ws_audio(
+                            websocket, pipeline, audio_buf.flush(),
+                            session_id, language, restaurant_id,
+                        )
+                        processing = False
+
+            # Binary frame → audio chunk
+            elif "bytes" in msg:
+                chunk = msg["bytes"]
+                if not chunk:
+                    continue
+
+                audio_buf.append(chunk)
+
+                # Check for end of utterance (silence detection)
+                # Note: actual silence detection requires analyzing audio energy,
+                # which we approximate by checking time gaps between chunks.
+                # The frontend should ideally send an "end" message when VAD detects silence.
+
+                if audio_buf.is_max_reached():
+                    if not processing:
+                        processing = True
+                        await _process_ws_audio(
+                            websocket, pipeline, audio_buf.flush(),
+                            session_id, language, restaurant_id,
+                        )
+                        processing = False
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket voice stream disconnected")
+    except Exception as e:
+        logger.exception("WebSocket stream error: %s", e)
+        try:
+            await websocket.send_json({"type": "error", "detail": str(e)})
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
+
+async def _process_ws_audio(
+    websocket: WebSocket,
+    pipeline,
+    audio_data: bytes,
+    session_id: str = None,
+    language: str = None,
+    restaurant_id: int = None,
+):
+    """Process accumulated audio buffer and send results back via WebSocket."""
+    if not audio_data:
+        return
+
+    # Save to temp file for Whisper
+    suffix = ".webm"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(audio_data)
+        tmp.flush()
+        tmp.close()
+
+        # Send partial transcript indicator
+        await websocket.send_json({
+            "type": "partial_transcript",
+            "text": "...",
+            "is_final": False,
+        })
+
+        # Run pipeline in thread pool (Whisper + NLP is CPU-bound)
+        result = await asyncio.to_thread(
+            pipeline.process_audio,
+            tmp.name,
+            session_id=session_id,
+            language_hint=language or None,
+            restaurant_id=restaurant_id,
+        )
+
+        # Send final transcript
+        await websocket.send_json({
+            "type": "final_transcript",
+            "text": result.get("transcript", ""),
+            "is_final": True,
+            "detected_language": result.get("detected_language", "en"),
+            "confidence": result.get("transcription_confidence", 0.0),
+        })
+
+        # Send full pipeline result
+        await websocket.send_json({
+            "type": "pipeline_result",
+            **result,
+        })
+
+        # Stream TTS response
+        if cfg.TTS_ENABLED and result.get("items"):
+            try:
+                from modules.voice.tts import tts_orchestrator
+                detected_lang = result.get("detected_language", "en")
+                tts_result = await tts_orchestrator.get_audio_response(result, detected_lang)
+                if tts_result.get("audio_b64"):
+                    await websocket.send_json({
+                        "type": "tts_chunk",
+                        "audio_b64": tts_result["audio_b64"],
+                        "spoken_text": tts_result["spoken_text"],
+                        "language": tts_result["language"],
+                        "is_last": True,
+                    })
+            except Exception as e:
+                logger.warning("WebSocket TTS failed: %s", e)
+
+    except Exception as e:
+        logger.exception("WebSocket audio processing failed")
+        await websocket.send_json({
+            "type": "error",
+            "detail": f"Processing failed: {e}",
+        })
     finally:
-        if audio_path:
-            Path(audio_path).unlink(missing_ok=True)
+        Path(tmp.name).unlink(missing_ok=True)

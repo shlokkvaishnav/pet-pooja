@@ -51,7 +51,7 @@ def _parse_date(value: str | None) -> date | None:
 
 class TableUpdateInput(BaseModel):
     status: str = Field(..., pattern=r"^(empty|occupied|reserved|cleaning)$")
-    current_order_id: str | None = None
+    current_order_id: int | None = None
 
 
 class TableBookInput(BaseModel):
@@ -171,7 +171,7 @@ def _sync_table_for_order(db: Session, order: Order):
     if not table_number:
         if previous_table_id:
             table = db.query(RestaurantTable).filter(RestaurantTable.id == previous_table_id).first()
-            if table and table.current_order_id == order.order_id:
+            if table and table.current_order_id == order.id:
                 table.current_order_id = None
                 table.status = "empty"
         order.table_id = None
@@ -189,16 +189,16 @@ def _sync_table_for_order(db: Session, order: Order):
     order.table_id = table.id
     if previous_table_id and previous_table_id != table.id:
         previous_table = db.query(RestaurantTable).filter(RestaurantTable.id == previous_table_id).first()
-        if previous_table and previous_table.current_order_id == order.order_id:
+        if previous_table and previous_table.current_order_id == order.id:
             previous_table.current_order_id = None
             previous_table.status = "empty"
 
     if order.status == "cancelled":
-        if table.current_order_id == order.order_id:
+        if table.current_order_id == order.id:
             table.current_order_id = None
             table.status = "empty"
     else:
-        table.current_order_id = order.order_id
+        table.current_order_id = order.id
         table.status = "reserved" if order.status == "building" else "occupied"
 
 
@@ -519,7 +519,7 @@ def get_tables(
             }
             # If occupied and has an order, load the order details with items
             if t.current_order_id:
-                order = db.query(Order).filter(Order.order_id == t.current_order_id).first()
+                order = db.query(Order).filter(Order.id == t.current_order_id).first()
                 if order:
                     table_data["seated_at"] = order.created_at.isoformat() if order.created_at else None
                     table_data["updated_at"] = order.updated_at.isoformat() if order.updated_at else None
@@ -642,7 +642,7 @@ def book_table(
         db.flush()  # ensure order row exists before FK reference
 
         table.status = "occupied"
-        table.current_order_id = order_id
+        table.current_order_id = new_order.id
 
         db.commit()
         db.refresh(table)
@@ -684,7 +684,7 @@ def settle_table(
         if not table.current_order_id:
             raise HTTPException(status_code=400, detail="No order linked to this table")
 
-        order = db.query(Order).filter(Order.order_id == table.current_order_id).first()
+        order = db.query(Order).filter(Order.id == table.current_order_id).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
@@ -817,7 +817,7 @@ def seat_reserved_table(
         db.flush()  # ensure order row exists before FK reference
 
         table.status = "occupied"
-        table.current_order_id = order_id
+        table.current_order_id = new_order.id
 
         db.commit()
 
@@ -900,7 +900,7 @@ def add_item_to_table_order(
             raise HTTPException(status_code=404, detail="Menu item not found")
 
         # Load the order for this table
-        order = db.query(Order).filter(Order.order_id == table.current_order_id).first()
+        order = db.query(Order).filter(Order.id == table.current_order_id).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found for this table")
 
@@ -944,7 +944,7 @@ def add_item_to_table_order(
 
         return {
             "table_id": table.id,
-            "order_id": table.current_order_id,
+            "order_id": order.order_id if order else None,
             "item_name": item.name,
             "quantity": quantity,
             "line_total": line_total,

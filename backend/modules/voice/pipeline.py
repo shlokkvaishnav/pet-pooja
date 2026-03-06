@@ -5,6 +5,7 @@ Loads menu data FROM DB at startup -> builds dynamic search corpus.
 No hardcoded menu items anywhere. All processing is local.
 """
 
+import time
 import uuid
 import logging
 
@@ -22,6 +23,12 @@ from .session_store import (
 )
 from .voice_config import cfg
 from . import pipeline_errors as errs
+
+# LLM brain — hybrid enhancement layer (lazy import to avoid circular deps)
+try:
+    from .llm_brain import llm_brain
+except ImportError:
+    llm_brain = None
 
 
 # -- Stub functions for D's files (until D delivers them) --
@@ -75,19 +82,34 @@ class VoicePipeline:
         self.corpus = corpus or build_search_corpus(menu_items)
         self._menu_map = {item.id: item for item in menu_items}
 
-    def process_text(self, text: str, session_id: str = None) -> dict:
+    def process_text(self, text: str, session_id: str = None,
+                     restaurant_id: int = None) -> dict:
         """Process text input (skips STT). For testing without audio."""
+        # Reset LLM brain call budget for this pipeline run
+        if llm_brain is not None:
+            llm_brain.reset_call_budget()
+
         session_lang = get_session_language(session_id) if session_id else None
         lang = _redetect_language(text, "unknown", 0.0, session_language=session_lang)
         return self._run_pipeline(text, original_transcript=text,
                                   detected_language=lang,
-                                  session_id=session_id)
+                                  session_id=session_id,
+                                  restaurant_id=restaurant_id)
 
     def process_audio(self, audio_path: str, session_id: str = None,
-                      language_hint: str = None) -> dict:
+                      language_hint: str = None, restaurant_id: int = None) -> dict:
         """Full pipeline: audio file -> structured order JSON."""
+        t0 = time.perf_counter()
+
+        # Reset LLM brain call budget for this pipeline run
+        if llm_brain is not None:
+            llm_brain.reset_call_budget()
+
         try:
+            t_stt_start = time.perf_counter()
             stt_result = transcribe(audio_path, language_hint=language_hint)
+            t_stt = time.perf_counter() - t_stt_start
+            logger.info("⏱ STT completed in %.1fms", t_stt * 1000)
         except FileNotFoundError:
             sr = errs.stt_model_error("ffmpeg not found")
             return self._error_response(sr, session_id=session_id)
@@ -138,6 +160,7 @@ class VoicePipeline:
             session_id=session_id,
             transcription_confidence=stt_result.get("transcription_confidence"),
             vad_info=stt_result.get("vad_info"),
+            restaurant_id=restaurant_id,
         )
 
     def _error_response(self, stage_result: errs.StageResult, *,
@@ -169,7 +192,8 @@ class VoicePipeline:
 
     def _run_pipeline(self, text, original_transcript, detected_language,
                       session_id=None, transcription_confidence=None,
-                      vad_info=None):
+                      vad_info=None, restaurant_id=None):
+        t_pipeline_start = time.perf_counter()
         stage_results = []   # list of StageResult.to_dict()
         user_messages = []   # list of user-facing strings
 
@@ -180,6 +204,28 @@ class VoicePipeline:
         intent_results = classify_intents(normalized)
         primary_intent, matched_pattern = classify_intent(normalized)
         is_compound = len(intent_results) > 1
+
+        # Stage 3b: LLM brain fallback for UNKNOWN intents
+        # If the regex classifier couldn't determine intent, ask the LLM
+        if (primary_intent == "UNKNOWN"
+                and llm_brain is not None and llm_brain.enabled):
+            try:
+                llm_intent = llm_brain.resolve_unknown_intent_sync(
+                    normalized, menu_items=self.menu_items,
+                )
+                if llm_intent and llm_intent["intent"] != "UNKNOWN":
+                    resolved_intent = llm_intent["intent"]
+                    logger.info("LLM brain rescued UNKNOWN → %s", resolved_intent)
+                    primary_intent = resolved_intent
+                    matched_pattern = f"llm:{resolved_intent.lower()}"
+                    # Re-classify all UNKNOWN clauses with the LLM result
+                    for ir in intent_results:
+                        if ir["intent"] == "UNKNOWN":
+                            ir["intent"] = resolved_intent
+                            ir["matched_pattern"] = matched_pattern
+                    is_compound = len(set(ir["intent"] for ir in intent_results)) > 1
+            except Exception as e:
+                logger.debug("LLM brain intent fallback failed: %s", e)
 
         # Stage 4-5: Process each clause independently
         all_enriched_items = []
@@ -205,7 +251,7 @@ class VoicePipeline:
                         user_messages.append(sr.user_message)
                     clause_with_mods.append({**item, "modifiers": mods})
 
-                enriched = self._enrich_with_menu_data(clause_with_mods)
+                enriched = self._enrich_with_menu_data(clause_with_mods, restaurant_id=restaurant_id)
 
                 # Check stock availability for ORDER items
                 if clause_intent == "ORDER":
@@ -225,20 +271,60 @@ class VoicePipeline:
                 # Zero match handling — different for ORDER vs CANCEL
                 if not enriched:
                     if clause_intent == "ORDER":
-                        # ORDER with no match → suggest alternatives
-                        fuzzy_suggestions = getattr(extract_all_items, "_last_fuzzy_suggestions", [])
-                        if not fuzzy_suggestions:
-                            fuzzy_suggestions = get_alternatives(clause, self.corpus, top_n=3)
-                        enriched_suggestions = []
-                        for s in fuzzy_suggestions:
-                            db_item = menu_map.get(s["item_id"])
-                            enriched_suggestions.append({
-                                **s,
-                                "item_name": db_item.name if db_item else s.get("matched_as", "?"),
-                            })
-                        sr = errs.zero_item_matches(clause, enriched_suggestions)
-                        stage_results.append(sr.to_dict())
-                        user_messages.append(sr.user_message)
+                        # ORDER with no match → try LLM brain recovery first
+                        llm_recovered = []
+                        if llm_brain is not None and llm_brain.enabled:
+                            try:
+                                llm_recovered = llm_brain.recover_items_sync(
+                                    clause, self.menu_items, self.corpus,
+                                )
+                            except Exception as e:
+                                logger.debug("LLM brain item recovery failed: %s", e)
+
+                        if llm_recovered:
+                            # Map LLM-recovered items back to real menu items via name
+                            name_to_item = {
+                                item.name.lower(): item
+                                for item in self.menu_items if item.name
+                            }
+                            for lr in llm_recovered:
+                                db_item = name_to_item.get(lr["name"].lower())
+                                if db_item:
+                                    # Filter by restaurant if needed
+                                    if (restaurant_id is not None
+                                            and getattr(db_item, 'restaurant_id', None) is not None
+                                            and db_item.restaurant_id != restaurant_id):
+                                        continue
+                                    enriched.append({
+                                        "item_id": db_item.id,
+                                        "item_name": db_item.name,
+                                        "quantity": lr["quantity"],
+                                        "unit_price": db_item.selling_price,
+                                        "line_total": lr["quantity"] * db_item.selling_price,
+                                        "modifiers": {},
+                                        "confidence": lr["confidence"],
+                                        "needs_disambiguation": False,
+                                        "alternatives": [],
+                                        "source": lr.get("source", "llm_recovery"),
+                                    })
+                            if enriched:
+                                logger.info("LLM brain recovered %d items from zero-match clause", len(enriched))
+
+                        if not enriched:
+                            # Still no match → suggest fuzzy alternatives
+                            fuzzy_suggestions = getattr(extract_all_items, "_last_fuzzy_suggestions", [])
+                            if not fuzzy_suggestions:
+                                fuzzy_suggestions = get_alternatives(clause, self.corpus, top_n=3)
+                            enriched_suggestions = []
+                            for s in fuzzy_suggestions:
+                                db_item = menu_map.get(s["item_id"])
+                                enriched_suggestions.append({
+                                    **s,
+                                    "item_name": db_item.name if db_item else s.get("matched_as", "?"),
+                                })
+                            sr = errs.zero_item_matches(clause, enriched_suggestions)
+                            stage_results.append(sr.to_dict())
+                            user_messages.append(sr.user_message)
                     elif clause_intent == "CANCEL":
                         # CANCEL with no specific items
                         if is_cancel_all(clause):
@@ -258,10 +344,40 @@ class VoicePipeline:
                             # don't accidentally clear the entire cart
                             clause_intent = "_CANCEL_NEEDS_CLARIFY"
 
-                # Ambiguous match: generate active prompts
+                # Ambiguous match: try LLM disambiguation first, then prompt user
+                session_items_for_disambig = get_session_items(session_id) if session_id else []
                 for item in enriched:
                     if item.get("needs_disambiguation"):
-                        sr = errs.ambiguous_match(item["item_name"], item.get("alternatives", []))
+                        alternatives = item.get("alternatives", [])
+                        # Try LLM to auto-resolve before asking user
+                        if (alternatives and llm_brain is not None and llm_brain.enabled):
+                            try:
+                                all_options = [{"item_name": item["item_name"],
+                                                "unit_price": item["unit_price"]}] + alternatives
+                                chosen = llm_brain.resolve_disambiguation_sync(
+                                    clause, all_options, session_items_for_disambig,
+                                )
+                                if chosen:
+                                    # Find the chosen item in menu and replace
+                                    chosen_db = next(
+                                        (m for m in self.menu_items if m.name == chosen), None
+                                    )
+                                    if chosen_db:
+                                        item["item_id"] = chosen_db.id
+                                        item["item_name"] = chosen_db.name
+                                        item["unit_price"] = chosen_db.selling_price
+                                        item["line_total"] = item["quantity"] * chosen_db.selling_price
+                                        item["confidence"] = 0.90
+                                        item["needs_disambiguation"] = False
+                                        item["alternatives"] = []
+                                        item["source"] = "llm_disambiguation"
+                                        logger.info("LLM auto-resolved disambiguation → %s", chosen)
+                                        continue  # skip adding error prompt
+                            except Exception as e:
+                                logger.debug("LLM disambiguation failed: %s", e)
+
+                        # LLM couldn't resolve or not available → prompt user
+                        sr = errs.ambiguous_match(item["item_name"], alternatives)
                         stage_results.append(sr.to_dict())
                         user_messages.append(sr.user_message)
 
@@ -281,7 +397,8 @@ class VoicePipeline:
                 clause_matched = extract_all_items(clause, self.corpus)
                 clause_with_qty = extract_quantities_for_items(clause, clause_matched)
                 clause_items = self._enrich_with_menu_data(
-                    [{**i, "modifiers": {}} for i in clause_with_qty]
+                    [{**i, "modifiers": {}} for i in clause_with_qty],
+                    restaurant_id=restaurant_id,
                 )
 
                 modifier_updates = extract_modifiers_with_target(
@@ -314,6 +431,72 @@ class VoicePipeline:
                 })
 
             else:
+                # For REPEAT, UNKNOWN, DONE, QUERY — try LLM context resolution
+                # Handles "same again", "one more", "double it", etc.
+                if (clause_intent in ("REPEAT", "UNKNOWN")
+                        and llm_brain is not None and llm_brain.enabled
+                        and session_id):
+                    try:
+                        session_items = get_session_items(session_id)
+                        ctx = llm_brain.resolve_context_sync(
+                            clause,
+                            session_items=session_items,
+                            prev_items=session_items,  # Use session items as context
+                        )
+                        if ctx and ctx.get("action") in ("add", "repeat"):
+                            # Map resolved items to menu items and add them
+                            name_to_item = {
+                                m.name.lower(): m
+                                for m in self.menu_items if m.name
+                            }
+                            resolved_enriched = []
+                            for ci in ctx.get("items", []):
+                                db_item = name_to_item.get(ci["name"].lower())
+                                if db_item:
+                                    if (restaurant_id is not None
+                                            and getattr(db_item, 'restaurant_id', None) is not None
+                                            and db_item.restaurant_id != restaurant_id):
+                                        continue
+                                    qty = ci.get("quantity", 1)
+                                    resolved_enriched.append({
+                                        "item_id": db_item.id,
+                                        "item_name": db_item.name,
+                                        "quantity": qty,
+                                        "unit_price": db_item.selling_price,
+                                        "line_total": qty * db_item.selling_price,
+                                        "modifiers": {},
+                                        "confidence": 0.85,
+                                        "needs_disambiguation": False,
+                                        "alternatives": [],
+                                        "clause_intent": "ORDER",
+                                        "clause": clause,
+                                        "source": "llm_context",
+                                    })
+                            if resolved_enriched:
+                                all_enriched_items.extend(resolved_enriched)
+                                intent_actions.append({
+                                    "intent": "ORDER",
+                                    "items": resolved_enriched,
+                                    "modifier_updates": [],
+                                })
+                                # Override the primary intent since we resolved it
+                                if primary_intent in ("REPEAT", "UNKNOWN"):
+                                    primary_intent = "ORDER"
+                                logger.info("LLM context resolution: %s → ORDER with %d items",
+                                            clause_intent, len(resolved_enriched))
+                                continue  # Skip adding the empty intent action
+                        elif ctx and ctx.get("action") == "confirm":
+                            intent_actions.append({
+                                "intent": "CONFIRM",
+                                "items": [],
+                                "modifier_updates": [],
+                            })
+                            if primary_intent in ("REPEAT", "UNKNOWN"):
+                                primary_intent = "CONFIRM"
+                            continue
+                    except Exception as e:
+                        logger.debug("LLM context resolution failed: %s", e)
+
                 intent_actions.append({
                     "intent": clause_intent,
                     "items": [],
@@ -408,6 +591,10 @@ class VoicePipeline:
                 seen_msgs.add(msg)
                 unique_messages.append(msg)
 
+        t_nlp = time.perf_counter() - t_pipeline_start
+        logger.info("⏱ NLP pipeline completed in %.1fms (intent=%s, items=%d)",
+                     t_nlp * 1000, primary_intent, len(all_enriched_items))
+
         return {
             "transcript": original_transcript,
             "normalized": normalized,
@@ -431,38 +618,50 @@ class VoicePipeline:
             "vad_info": vad_info,
             "stage_results": stage_results,
             "user_messages": unique_messages,
+            "timing_ms": round(t_nlp * 1000, 1),
         }
 
-    def _enrich_with_menu_data(self, matched_items):
-        """Adds name, price FROM DB to each matched item."""
+    def _enrich_with_menu_data(self, matched_items, restaurant_id: int = None):
+        """Adds name, price FROM DB to each matched item.
+        If restaurant_id is given, only items belonging to that restaurant are kept."""
         menu_map = self._menu_map
         enriched = []
         for match in matched_items:
             menu_item = menu_map.get(match["item_id"])
-            if menu_item:
-                # Enrich alternatives with menu data
-                alternatives = []
-                for alt in match.get("alternatives", []):
-                    alt_item = menu_map.get(alt["item_id"])
-                    if alt_item:
-                        alternatives.append({
-                            "item_id": alt["item_id"],
-                            "item_name": alt_item.name,
-                            "confidence": alt["confidence"],
-                            "unit_price": alt_item.selling_price,
-                        })
+            if not menu_item:
+                continue
+            # Skip items not belonging to the current restaurant
+            if restaurant_id is not None and getattr(menu_item, 'restaurant_id', None) is not None:
+                if menu_item.restaurant_id != restaurant_id:
+                    continue
 
-                enriched.append({
-                    "item_id": match["item_id"],
-                    "item_name": menu_item.name,
-                    "quantity": match["quantity"],
-                    "unit_price": menu_item.selling_price,
-                    "line_total": match["quantity"] * menu_item.selling_price,
-                    "modifiers": match["modifiers"],
-                    "confidence": match["confidence"],
-                    "needs_disambiguation": match.get("needs_disambiguation", False),
-                    "alternatives": alternatives,
+            # Enrich alternatives with menu data (also filtered by restaurant)
+            alternatives = []
+            for alt in match.get("alternatives", []):
+                alt_item = menu_map.get(alt["item_id"])
+                if not alt_item:
+                    continue
+                if restaurant_id is not None and getattr(alt_item, 'restaurant_id', None) is not None:
+                    if alt_item.restaurant_id != restaurant_id:
+                        continue
+                alternatives.append({
+                    "item_id": alt["item_id"],
+                    "item_name": alt_item.name,
+                    "confidence": alt["confidence"],
+                    "unit_price": alt_item.selling_price,
                 })
+
+            enriched.append({
+                "item_id": match["item_id"],
+                "item_name": menu_item.name,
+                "quantity": match["quantity"],
+                "unit_price": menu_item.selling_price,
+                "line_total": match["quantity"] * menu_item.selling_price,
+                "modifiers": match["modifiers"],
+                "confidence": match["confidence"],
+                "needs_disambiguation": match.get("needs_disambiguation", False),
+                "alternatives": alternatives,
+            })
         return enriched
 
 

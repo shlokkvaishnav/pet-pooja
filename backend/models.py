@@ -88,7 +88,7 @@ class RestaurantTable(Base):
     capacity = Column(Integer, nullable=False, default=4)
     section = Column(String(50), default="main")  # main | patio | private | bar
     status = Column(String(20), default="empty")  # empty | occupied | reserved | cleaning
-    current_order_id = Column(String(50), ForeignKey("orders.order_id"), nullable=True)
+    current_order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
 
     current_order = relationship("Order", foreign_keys=[current_order_id])
 

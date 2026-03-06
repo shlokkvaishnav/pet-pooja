@@ -426,9 +426,14 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
         }
     """
     # Step 1: Convert to WAV
+    import time as _time
+    t0 = _time.perf_counter()
     wav_path = convert_to_wav(audio_path)
+    t_convert = _time.perf_counter() - t0
+    logger.info("⏱ ffmpeg convert in %.0fms", t_convert * 1000)
 
     # Step 2: VAD preprocessing — strip noise, keep only speech
+    t_vad_start = _time.perf_counter()
     vad_info = None
     transcribe_path = wav_path  # default: send full WAV to Whisper
 
@@ -458,6 +463,9 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
         logger.warning("VAD preprocessing failed, using raw audio: %s", e)
         vad_info = {"error": str(e), "has_speech": True}
 
+    t_vad = _time.perf_counter() - t_vad_start
+    logger.info("⏱ VAD preprocessing in %.0fms", t_vad * 1000)
+
     # Step 3: Whisper transcription on cleaned audio
     # IMPORTANT: Always use language=None so Whisper auto-detects and outputs
     # romanized/Latin-script text. If we pass language='gu'/'mr'/'kn', Whisper
@@ -465,6 +473,7 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
     # against English menu names. The language_hint is used ONLY for final
     # detected_language override (TTS voice/template selection).
     model = _get_model()
+    t_whisper_start = _time.perf_counter()
     segments_gen, info = model.transcribe(
         transcribe_path,
         beam_size=cfg.STT_BEAM_SIZE,
@@ -478,6 +487,9 @@ def transcribe(audio_path: str, language_hint: str = None) -> dict:
 
     # Step 4: Collect segments and compute confidence
     segments_list = list(segments_gen)
+    t_whisper = _time.perf_counter() - t_whisper_start
+    logger.info("⏱ Whisper transcribe in %.0fms (beam=%d, model=%s)",
+                 t_whisper * 1000, cfg.STT_BEAM_SIZE, cfg.WHISPER_MODEL)
     transcript, overall_confidence, segment_details = _compute_segment_confidence(segments_list)
 
     # Step 5: Confidence gating
