@@ -237,6 +237,8 @@ def _get_or_create_settings(db: Session, restaurant_id: int) -> RestaurantSettin
     )
     db.add(settings)
     db.flush()
+    db.commit()
+    db.refresh(settings)
     return settings
 
 
@@ -536,7 +538,12 @@ def get_tables(
             }
             # If occupied and has an order, load the order details with items
             if t.current_order_id:
-                order = db.query(Order).filter(Order.id == t.current_order_id).first()
+                # current_order_id may be an integer PK or a string order_id
+                raw_oid = t.current_order_id
+                if isinstance(raw_oid, str) and not str(raw_oid).isdigit():
+                    order = db.query(Order).filter(Order.order_id == raw_oid).first()
+                else:
+                    order = db.query(Order).filter(Order.id == int(raw_oid)).first()
                 if order:
                     table_data["seated_at"] = order.created_at.isoformat() if order.created_at else None
                     table_data["updated_at"] = order.updated_at.isoformat() if order.updated_at else None
@@ -893,6 +900,36 @@ def get_menu_items_list(
     except Exception as e:
         logger.exception("Error fetching menu items")
         raise HTTPException(status_code=500, detail=f"Menu items fetch failed: {e}")
+
+
+class MenuItemPriceUpdate(BaseModel):
+    selling_price: float = Field(..., gt=0)
+
+
+@router.patch("/menu-items/{item_id}/price")
+def update_menu_item_price(
+    item_id: int,
+    body: MenuItemPriceUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update the selling price of a menu item."""
+    try:
+        item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
+        if not item:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+        item.selling_price = body.selling_price
+        db.commit()
+        db.refresh(item)
+        return {
+            "item_id": item.id,
+            "name": item.name,
+            "selling_price": item.selling_price,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error updating menu item price")
+        raise HTTPException(status_code=500, detail=f"Price update failed: {e}")
 
 
 @router.post("/tables/{table_id}/add-item")
@@ -1488,7 +1525,7 @@ def export_reports(
 
 @router.get("/settings")
 def get_settings(
-    restaurant_id: int | None = None,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -1532,7 +1569,7 @@ def get_settings(
 @router.patch("/settings")
 def update_settings(
     body: SettingsUpdateInput,
-    restaurant_id: int | None = None,
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """

@@ -248,7 +248,7 @@ export default function MenuAnalysis() {
                 <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>Category Revenue Trends (30-day)</span>
                   <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => setShowAllCategoryTrends((prev) => !prev)}>
-                    {showAllCategoryTrends ? 'Hide Zero-Revenue Categories' : 'Show All'}
+                    {showAllCategoryTrends ? 'Hide Zero-Revenue' : 'Show All'}
                   </button>
                 </div>
                 <div className="card-body" style={{ padding: 0 }}>
@@ -326,13 +326,22 @@ export default function MenuAnalysis() {
                         <button
                           className={acknowledged[row.id] ? 'btn btn-secondary' : 'btn btn-ghost'}
                           style={{ fontSize: 11 }}
-                          onClick={() => {
-                            setAcknowledged((prev) => ({ ...prev, [row.id]: true }))
-                            console.log('Price suggestion acknowledged', row)
+                          onClick={async () => {
+                            if (row.suggested_price && row.item_id) {
+                              try {
+                                const { updateMenuItemPrice } = await import('../api/client')
+                                await updateMenuItemPrice(row.item_id, row.suggested_price)
+                                setAcknowledged((prev) => ({ ...prev, [row.id]: true }))
+                              } catch (err) {
+                                console.error('Price update failed:', err)
+                              }
+                            } else {
+                              setAcknowledged((prev) => ({ ...prev, [row.id]: true }))
+                            }
                           }}
                           disabled={!!acknowledged[row.id]}
                         >
-                          {acknowledged[row.id] ? 'Acknowledged' : 'Apply Suggestion'}
+                          {acknowledged[row.id] ? 'Applied' : 'Apply Suggestion'}
                         </button>
                       </td>
                     </tr>

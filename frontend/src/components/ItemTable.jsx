@@ -9,7 +9,7 @@ const QUADRANT_META = {
 }
 
 function ItemTable({ items, categoryFilter, quadrantFilter }) {
-  const [sortBy, setSortBy] = useState('cm_percent')
+  const [sortBy, setSortBy] = useState('margin_pct')
   const [sortDir, setSortDir] = useState('desc')
   const thresholds = useThresholds()
 

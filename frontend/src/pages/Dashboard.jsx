@@ -373,7 +373,7 @@ export default function Dashboard() {
               <BarChart data={topItemsByRevenue} layout="vertical" margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
                 <XAxis type="number" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} tickFormatter={(v) => formatRupeesShort(v)} />
                 <YAxis dataKey="name" type="category" width={120} tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} />
+                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} cursor={false} />
                 <Bar dataKey="revenue_last_30d" radius={[0, 6, 6, 0]}>
                   {topItemsByRevenue.map((_, index) => (
                     <Cell key={index} fill={barColorByRank(index, topItemsByRevenue.length)} />
@@ -396,8 +396,8 @@ export default function Dashboard() {
                 <BarChart data={hourlyOrders} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={CHART_TOOLTIP} />
-                  <Bar dataKey="orders" radius={[4, 4, 0, 0]}>
+                  <Tooltip contentStyle={CHART_TOOLTIP} cursor={false} />
+                  <Bar dataKey="orders" radius={[6, 6, 0, 0]}>
                     {hourlyOrders.map((_, index) => (
                       <Cell key={index} fill={barColorByRank(index, hourlyOrders.length)} />
                     ))}
@@ -421,7 +421,7 @@ export default function Dashboard() {
                       <div className="dash-low-stock-name">{item.name}</div>
                       <div className="dash-low-stock-meta">{item.current_stock} {item.unit} left • Reorder at {item.reorder_level}</div>
                     </div>
-                    <button className="btn btn-ghost" style={{ fontSize: 11 }}>Reorder</button>
+                    <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => navigate('/dashboard/inventory')}>Reorder</button>
                   </div>
                 ))}
               </div>
@@ -474,7 +474,7 @@ export default function Dashboard() {
                     <span className="dash-drift-badge">{item.drift_direction}</span>
                   </div>
                   <p>{item.drift_warning}</p>
-                  <button className="btn btn-ghost" style={{ fontSize: 11 }}>Promote This Item</button>
+                  <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => navigate(`/dashboard/menu-analysis?item=${item.item_id}`)}>Promote This Item</button>
                 </div>
               ))}
             </div>

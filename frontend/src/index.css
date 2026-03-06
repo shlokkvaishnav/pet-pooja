@@ -2080,6 +2080,18 @@ body {
   max-width: calc(100vw - 100px);
 }
 
+.main-content-restaurant-bar {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-6);
+}
+
 .sidebar--collapsed .sidebar-brand {
   padding: 8px 10px 10px;
 }
@@ -4828,6 +4840,17 @@ a:focus-visible {
 /* ─── Tooltip fade ─── */
 .recharts-tooltip-wrapper {
   transition: opacity 0.2s !important;
+}
+
+/* ─── Fix recharts bar hover cursor (white flash) ─── */
+.recharts-bar-rectangle .recharts-rectangle.recharts-tooltip-cursor,
+.recharts-tooltip-cursor {
+  fill: transparent !important;
+}
+
+.recharts-active-bar,
+.recharts-bar-rectangle:hover rect {
+  filter: brightness(1.15);
 }
 
 /* ─── KOT Ticket ─── */

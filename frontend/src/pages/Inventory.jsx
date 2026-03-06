@@ -99,10 +99,6 @@ export default function Inventory() {
             <div className="app-kpi-label">Low Stock</div>
             <div className="app-kpi-value">{summary.low_stock_count}</div>
           </div>
-          <div className="app-kpi">
-            <div className="app-kpi-label">Waste (30d)</div>
-            <div className="app-kpi-value">{summary.waste_qty} kg</div>
-          </div>
         </div>
       </div>
 
@@ -112,43 +108,30 @@ export default function Inventory() {
         </div>
       ) : null}
 
-      <div className="app-grid-2">
-        <div className="card">
-          <div className="card-header">Low Stock Alerts</div>
-          <div className="card-body">
-            {low_stock.length === 0 ? (
-              <div className="inventory-success-empty">
-                <span className="inventory-success-icon">✓</span>
-                <div>
-                  <div className="inventory-success-title">All ingredients well-stocked</div>
-                  <div className="inventory-success-sub">No low-stock alerts right now.</div>
-                </div>
+      <div className="card">
+        <div className="card-header">Low Stock Alerts</div>
+        <div className="card-body">
+          {low_stock.length === 0 ? (
+            <div className="inventory-success-empty">
+              <span className="inventory-success-icon">✓</span>
+              <div>
+                <div className="inventory-success-title">All ingredients well-stocked</div>
+                <div className="inventory-success-sub">No low-stock alerts right now.</div>
               </div>
-            ) : (
-              <div className="alert-list">
-                {low_stock.map((i) => (
-                  <div key={i.ingredient_id} className="alert-row">
-                    <div>
-                      <div className="alert-title">{i.name}</div>
-                      <div className="alert-sub">Reorder at {i.reorder_level} {i.unit}</div>
-                    </div>
-                    <div className="alert-value">{i.current_stock} {i.unit}</div>
+            </div>
+          ) : (
+            <div className="alert-list">
+              {low_stock.map((i) => (
+                <div key={i.ingredient_id} className="alert-row">
+                  <div>
+                    <div className="alert-title">{i.name}</div>
+                    <div className="alert-sub">Reorder at {i.reorder_level} {i.unit}</div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="inventory-metrics-grid">
-          <motion.div className="app-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-            <div className="app-card-label">Usage (30d)</div>
-            <div className="app-card-value">{summary.usage_qty} kg</div>
-          </motion.div>
-          <motion.div className="app-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-            <div className="app-card-label">Waste (30d)</div>
-            <div className="app-card-value">{summary.waste_qty} kg</div>
-          </motion.div>
+                  <div className="alert-value">{i.current_stock} {i.unit}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

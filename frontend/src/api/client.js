@@ -403,6 +403,13 @@ export const updateIngredient = (ingredientId, payload) =>
     return data
   })
 
+export const updateMenuItemPrice = (itemId, sellingPrice) =>
+  patch(`/ops/menu-items/${itemId}/price`, { selling_price: sellingPrice }).then((data) => {
+    invalidateCacheByPrefix('/revenue/menu-matrix?')
+    invalidateCacheByPrefix('/revenue/price-recommendations?')
+    return data
+  })
+
 export const exportReportsCsv = (params = {}) =>
   api.get('/ops/reports/export', { params: _params(params), responseType: 'blob' }).then((r) => r.data)
 

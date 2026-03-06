@@ -232,8 +232,10 @@ export function buildPriceOpportunities({
       const volImpactLow = -Math.round(increasePct * 0.38)
       opportunities.push({
         id: `inc-${item.item_id}`,
+        item_id: item.item_id,
         item_name: safeName(item),
         current_price: p,
+        suggested_price: newPrice,
         suggested_action: `Increase to Rs ${newPrice}`,
         expected_cm_impact: `+${cmImpactLow}% to +${cmImpactHigh}%`,
         expected_volume_impact: `${volImpactLow}% to ${volImpactHigh}%`,
@@ -250,8 +252,10 @@ export function buildPriceOpportunities({
       const volImpactHigh = Math.round(decreasePct * 2.25)
       opportunities.push({
         id: `dec-${item.item_id}`,
+        item_id: item.item_id,
         item_name: safeName(item),
         current_price: p,
+        suggested_price: newPrice,
         suggested_action: `Decrease to Rs ${newPrice}`,
         expected_cm_impact: `${cmImpactLow}% to ${cmImpactHigh > 0 ? '+' : ''}${cmImpactHigh}%`,
         expected_volume_impact: `+${volImpactLow}% to +${volImpactHigh}%`,
