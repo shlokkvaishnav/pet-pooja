@@ -174,7 +174,7 @@ export default function MenuAnalysis() {
         <div>
           <div className="app-hero-eyebrow">Intelligence</div>
           <h1 className="app-hero-title">Menu Intelligence</h1>
-          <p className="app-hero-sub">Menu performance by profitability and popularity with pricing opportunities.</p>
+          <p className="app-hero-sub">Menu performance by profitability and popularity. See which items are driving your revenue.</p>
         </div>
       </motion.div>
 
