@@ -38,6 +38,7 @@ def _new_session(session_id: str) -> dict:
         "last_items": [],
         "turn_count": 0,
         "confirmed": False,
+        "detected_language": None,
     }
 
 
@@ -421,3 +422,16 @@ def clear_session(session_id: str):
 def get_session_items(session_id: str) -> list:
     """Get all accumulated order items for a session."""
     return _backend.get_items(session_id)
+
+
+def get_session_language(session_id: str) -> str | None:
+    """Get the detected language stored in the session (if any)."""
+    session = _backend.get(session_id)
+    return session.get("detected_language")
+
+
+def set_session_language(session_id: str, language: str):
+    """Store the detected language in the session for stickiness across turns."""
+    session = _backend.get(session_id)
+    session["detected_language"] = language
+    _backend.save(session)

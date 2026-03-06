@@ -241,7 +241,10 @@ class LLMResponseGenerator:
             return self._t_modify(lang, "the item", "as requested")
 
         if intent == "CONFIRM":
-            total = order.get("subtotal", 0) if order else 0
+            # Use session_order (accumulated cart) — order is only current turn's items
+            session_order = pipeline_result.get("session_order")
+            confirm_order = session_order or order
+            total = confirm_order.get("subtotal", 0) if confirm_order else 0
             return self._t_confirm(lang, total)
 
         # Disambiguation

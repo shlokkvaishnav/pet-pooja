@@ -105,8 +105,8 @@ def generate_kot(order: dict) -> dict:
     kot_items = []
     for item in order["items"]:
         kot_line = {
-            "name": item["name"],
-            "qty": item["quantity"],
+            "name": item.get("name") or item.get("item_name", "Unknown Item"),
+            "qty": item.get("quantity", 1),
             "modifiers": [],
             "notes": "",
         }
@@ -207,11 +207,11 @@ def save_order_to_db(order: dict, kot: dict, db: Session) -> dict:
         for item in order["items"]:
             db_item = OrderItem(
                 order_id=order["order_id"],
-                item_id=item["item_id"],
-                quantity=item["quantity"],
-                unit_price=item["unit_price"],
+                item_id=item.get("item_id"),
+                quantity=item.get("quantity", 1),
+                unit_price=item.get("unit_price", 0),
                 modifiers_applied=item.get("modifiers", {}),
-                line_total=item["line_total"],
+                line_total=item.get("line_total", 0),
             )
             db.add(db_item)
 

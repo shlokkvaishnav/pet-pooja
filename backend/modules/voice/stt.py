@@ -181,6 +181,36 @@ _HINDI_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
+# Gujarati romanized markers — words that distinguish Gujarati from Hindi
+_GUJARATI_MARKERS = re.compile(
+    r"\b("
+    r"che|chhe|chhu|nathi|hoy|hato|hashe|hase"   # auxiliaries
+    r"|joiye|joie|aapo|apo|aavo|karvo|karvu"       # verbs
+    r"|tame|tamne|tamaro|tamari|amne|amaro"         # pronouns
+    r"|kem|shu|kyare|kyan|ketlu|ketla"              # question words
+    r"|saras|saru|majama|sambhalo"                  # adjectives/expressions
+    r"|rotli|rotlo|thepla|dhokla|khandvi|fafda"     # Gujarati food
+    r"|undhiyu|handvo|khakhra|gathiya|jalebi"       # more Gujarati food
+    r"|bas\s*thai|puru|nakki|besi|besvu"            # common phrases
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Marathi romanized markers — words that distinguish Marathi from Hindi
+_MARATHI_MARKERS = re.compile(
+    r"\b("
+    r"aahe|aahes|aahet|naahi|naye|ashe"             # auxiliaries
+    r"|mhanje|mhanun|kaay|kasa|kashi|kuthe"         # question/connectors
+    r"|dya|ghya|sanga|sangaa|kara|lava|theva"       # verbs
+    r"|amhi|tumhi|tumhala|aamhala|tyala|tila"       # pronouns
+    r"|bhari|chhan|mast|ekdum"                       # adjectives
+    r"|vada\s*pav|pav\s*bhaji|misal|puran\s*poli"   # Marathi food
+    r"|thalipeeth|sabudana|poha|usal|modak"          # more Marathi food
+    r"|jhale|zale|sampale|thik\s*aahe|chalel"       # common phrases
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Gujarati script detection (Unicode block: 0A80-0AFF)
 _GUJARATI_SCRIPT = re.compile(r"[\u0A80-\u0AFF]")
 
@@ -211,18 +241,25 @@ _WHISPER_LANG_MAP = {
 }
 
 
-def _redetect_language(transcript: str, whisper_lang: str, whisper_confidence: float) -> str:
+def _redetect_language(transcript: str, whisper_lang: str, whisper_confidence: float,
+                       session_language: str = None) -> str:
     """
     Re-detect the language from the transcript text content.
     Overrides Whisper's audio-level detection when text evidence is strong.
 
+    Args:
+        session_language: Language from previous turns in this session.
+                         Used as a tiebreaker when text evidence is ambiguous.
+
     Strategy:
     1. Native script present → use that script's language (definitive)
-    2. Hindi/Hinglish markers dominant → "hi"
-    3. Pure English with high Whisper confidence → "en"
-    4. Low Whisper confidence + Hindi markers → "hi" (Hinglish default)
-    5. Fall back to Whisper's detection if it maps to a supported language
-    6. Otherwise default to "en"
+    2. Gujarati romanized markers → "gu"
+    3. Marathi romanized markers → "mr"
+    4. Hindi/Hinglish markers dominant → "hi"
+    5. Pure English with high Whisper confidence → "en"
+    6. Session language stickiness (if ambiguous, prefer session's language)
+    7. Fall back to Whisper's detection if it maps to a supported language
+    8. Otherwise default to "en"
     """
     if not transcript or not transcript.strip():
         return _WHISPER_LANG_MAP.get(whisper_lang, "en")
@@ -244,32 +281,52 @@ def _redetect_language(transcript: str, whisper_lang: str, whisper_confidence: f
             return "mr"
         return "hi"
 
-    # 2. Count Hindi/Hinglish vs pure English word markers
+    # 2. Count romanized language-specific markers
     hindi_hits = len(_HINDI_MARKERS.findall(text))
     english_hits = len(_ENGLISH_MARKERS.findall(text))
+    gujarati_hits = len(_GUJARATI_MARKERS.findall(text))
+    marathi_hits = len(_MARATHI_MARKERS.findall(text))
     word_count = max(len(text.split()), 1)
+
+    # 3. Gujarati/Marathi markers take priority (they are more specific)
+    if gujarati_hits >= 2 and gujarati_hits > marathi_hits:
+        return "gu"
+    if marathi_hits >= 2 and marathi_hits > gujarati_hits:
+        return "mr"
+    # Even 1 hit + Whisper agreement is enough
+    if gujarati_hits >= 1 and whisper_lang in ("gu", "gujarati"):
+        return "gu"
+    if marathi_hits >= 1 and whisper_lang in ("mr", "marathi"):
+        return "mr"
 
     hindi_ratio = hindi_hits / word_count
     english_ratio = english_hits / word_count
 
-    # Strong Hindi/Hinglish signal → "hi"
+    # 4. Strong Hindi/Hinglish signal → "hi"
     if hindi_hits >= 2 and hindi_ratio > english_ratio:
         return "hi"
 
     # Mixed — mostly Hindi markers present → "hi" (Hinglish is spoken as Hindi)
     if hindi_hits >= 1 and whisper_confidence < 0.8:
+        # But if session language is gu/mr and Hindi markers are weak, prefer session
+        if session_language in ("gu", "mr") and hindi_hits <= 2:
+            return session_language
         return "hi"
 
-    # 3. High-confidence Whisper with pure English text → trust Whisper
+    # 5. High-confidence Whisper with pure English text → trust Whisper
     if whisper_confidence >= 0.8 and english_ratio > 0.3 and hindi_hits == 0:
         return "en"
 
-    # 4. Map Whisper's language to our supported set
+    # 6. Session language stickiness — when text is ambiguous, prefer session's language
+    if session_language and session_language in ("hi", "gu", "mr", "kn", "en"):
+        return session_language
+
+    # 7. Map Whisper's language to our supported set
     mapped = _WHISPER_LANG_MAP.get(whisper_lang)
     if mapped:
         return mapped
 
-    # 5. Default fallback: if Hindi markers at all, say "hi"
+    # 8. Default fallback: if Hindi markers at all, say "hi"
     if hindi_hits >= 1:
         return "hi"
 

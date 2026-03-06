@@ -30,10 +30,27 @@ _CLAUSE_SPLITTERS = re.compile(
 # ── Intent patterns — linguistic ordering phrases ──
 INTENT_PATTERNS = {
     "DONE": [
-        r"\b(done|that'?s?\s*it|that'?s?\s*all|bas|buss|ho\s*gaya|ho\s*gya|hogaya|hogya|khatam|enough|no\s*more|nothing\s*else|aur\s*nahi|aur\s*kuch\s*nahi|itna\s*hi|over|finish)\b",
+        # English
+        r"\b(done|that'?s?\s*it|that'?s?\s*all|that\s*will\s*be\s*all|enough|no\s*more|nothing\s*else|nothing\s*more|over|finish)\b",
+        # Hindi / Hinglish (+ Whisper spelling variants for "bas")
+        r"\b(bas|buss|bus|boss|bass|ho\s*gaya|ho\s*gya|hogaya|hogya|khatam|aur\s*nahi|aur\s*kuch\s*nahi|itna\s*hi|bas\s*kar|bus\s*kar|ho\s*gai|hogai)\b",
+        # Gujarati romanized
+        r"\b(bas\s*thai\s*gay?u|thayu|thai\s*gayu|aatle|puru|puro)\b",
+        # Marathi romanized
+        r"\b(jhale?|zhale?|bas\s*zale|sampale?|puro|zale|jhala)\b",
     ],
     "CONFIRM": [
-        r"\b(yes|haan|ha|okay|ok|theek hai|sahi|bilkul|confirm|correct|right|place\s*(?:the\s*)?order|laga\s*do|kar\s*do)\b",
+        # English
+        r"\b(yes|yeah|yep|yup|sure|okay|ok|confirm|correct|right|go\s*ahead|definitely|absolutely|place\s*(?:the\s*)?order)\b",
+        # Hindi / Hinglish
+        r"\b(haan|haa|ha\s+ji|haji|theek\s*hai|thik\s*hai|sahi|bilkul|pakka|kar\s*do|kardo|karo|laga\s*do|lagado|lagao|de\s*do|dedo)\b",
+        # Hindi compound: "order kar do", "order laga do", "order de do"
+        r"\border\s*(?:kar\s*do|kardo|karo|laga\s*do|lagado|lagao|de\s*do|dedo|place\s*kar)\b",
+        # Gujarati romanized
+        r"\b(haa|chale|chalse|karso|muki\s*d[oy]o?|muko)\b",
+        # Marathi romanized ("ho" but not "ho gaya"/"ho gya")
+        r"\bho\b(?!\s*g[ay])",
+        r"\b(chalu\s*kar|lava|dya|ghya|order\s*dya|thik\s*aahe)\b",
     ],
     "CANCEL": [
         r"\b(cancel|remove|hatao|hata\s+do|mat\s+dena|nahi\s+chahiye|wrong|galat|undo|nikal)\b",
