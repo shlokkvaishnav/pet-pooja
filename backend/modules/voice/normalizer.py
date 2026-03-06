@@ -48,12 +48,126 @@ DEVANAGARI_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Character-level Devanagari → Roman transliteration
+# Fallback for words NOT covered by the word-level DEVANAGARI_MAP above.
+# Produces approximate romanizations that downstream fuzzy + semantic
+# matching can resolve to correct menu items.
+# ---------------------------------------------------------------------------
+_DEV_VOWELS_INDEP = {
+    '\u0905': 'a', '\u0906': 'aa', '\u0907': 'i', '\u0908': 'ee',
+    '\u0909': 'u', '\u090A': 'oo', '\u090F': 'e', '\u0910': 'ai',
+    '\u0913': 'o', '\u0914': 'au', '\u090B': 'ri',
+}
+_DEV_MATRAS = {
+    '\u093E': 'a', '\u093F': 'i', '\u0940': 'ee', '\u0941': 'u',
+    '\u0942': 'oo', '\u0947': 'e', '\u0948': 'ai', '\u094B': 'o',
+    '\u094C': 'au', '\u0943': 'ri',
+}
+_DEV_CONSONANTS = {
+    '\u0915': 'k', '\u0916': 'kh', '\u0917': 'g', '\u0918': 'gh', '\u0919': 'ng',
+    '\u091A': 'ch', '\u091B': 'chh', '\u091C': 'j', '\u091D': 'jh', '\u091E': 'ny',
+    '\u091F': 't', '\u0920': 'th', '\u0921': 'd', '\u0922': 'dh', '\u0923': 'n',
+    '\u0924': 't', '\u0925': 'th', '\u0926': 'd', '\u0927': 'dh', '\u0928': 'n',
+    '\u092A': 'p', '\u092B': 'ph', '\u092C': 'b', '\u092D': 'bh', '\u092E': 'm',
+    '\u092F': 'y', '\u0930': 'r', '\u0932': 'l', '\u0935': 'v',
+    '\u0936': 'sh', '\u0937': 'sh', '\u0938': 's', '\u0939': 'h',
+}
+_DEV_NUKTA_MAP = {
+    '\u0915\u093C': 'q', '\u0916\u093C': 'kh', '\u0917\u093C': 'gh',
+    '\u091C\u093C': 'z', '\u0921\u093C': 'r', '\u0922\u093C': 'rh',
+    '\u092B\u093C': 'f',
+}
+_DEV_DIGITS = {
+    '\u0966': '0', '\u0967': '1', '\u0968': '2', '\u0969': '3', '\u096A': '4',
+    '\u096B': '5', '\u096C': '6', '\u096D': '7', '\u096E': '8', '\u096F': '9',
+}
+_HALANT = '\u094D'
+_NUKTA_CHAR = '\u093C'
+_ANUSVARA = '\u0902'
+_CHANDRABINDU = '\u0901'
+_VISARGA = '\u0903'
+
+
+def _is_devanagari(c: str) -> bool:
+    return '\u0900' <= c <= '\u097F'
+
+
+def _transliterate_remaining_devanagari(text: str) -> str:
+    """
+    Character-by-character Devanagari → Roman transliteration.
+    Uses word-final schwa deletion: last consonant in a Devanagari
+    word (before space / non-Devanagari / end) omits inherent 'a'.
+    """
+    result = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        # Non-Devanagari: pass through
+        if not _is_devanagari(c):
+            result.append(c)
+            i += 1
+            continue
+        # Devanagari digit
+        if c in _DEV_DIGITS:
+            result.append(_DEV_DIGITS[c])
+            i += 1
+            continue
+        # Nukta-modified consonant (e.g. ज़ = ज + ़)
+        base = None
+        if i + 1 < n and text[i + 1] == _NUKTA_CHAR:
+            combo = c + _NUKTA_CHAR
+            base = _DEV_NUKTA_MAP.get(combo, _DEV_CONSONANTS.get(c, ''))
+            i += 2
+        elif c in _DEV_CONSONANTS:
+            base = _DEV_CONSONANTS[c]
+            i += 1
+        elif c in _DEV_VOWELS_INDEP:
+            result.append(_DEV_VOWELS_INDEP[c])
+            i += 1
+            continue
+        elif c in (_ANUSVARA, _CHANDRABINDU):
+            result.append('n')
+            i += 1
+            continue
+        elif c == _VISARGA:
+            result.append('h')
+            i += 1
+            continue
+        else:
+            i += 1            # skip unknown Devanagari marks
+            continue
+
+        # --- Consonant post-processing: halant / matra / inherent vowel ---
+        if i < n and text[i] == _HALANT:
+            result.append(base)        # halant suppresses inherent vowel
+            i += 1
+        elif i < n and text[i] in _DEV_MATRAS:
+            result.append(base + _DEV_MATRAS[text[i]])
+            i += 1
+        else:
+            # Word-final schwa deletion: omit inherent 'a' at end of
+            # Devanagari word (next char is space / non-Devanagari / end)
+            at_word_end = (i >= n or not _is_devanagari(text[i]))
+            result.append(base if at_word_end else base + 'a')
+
+    return ''.join(result)
+
+
 def _transliterate_devanagari(text: str) -> str:
-    """Replace Devanagari tokens with romanized equivalents."""
-    for dev, roman in DEVANAGARI_MAP.items():
+    """
+    Two-pass Devanagari transliteration:
+      1. Word-level: replace known words/phrases from DEVANAGARI_MAP
+         (longest match first to prevent partial replacements)
+      2. Character-level: transliterate any remaining Devanagari chars
+    """
+    # Pass 1 — word/phrase level (longest first to avoid partial matches)
+    for dev, roman in sorted(DEVANAGARI_MAP.items(),
+                             key=lambda x: len(x[0]), reverse=True):
         text = text.replace(dev, roman)
-    # Drop any remaining Devanagari characters (U+0900-U+097F)
-    text = re.sub(r"[\u0900-\u097F]+", " ", text)
+    # Pass 2 — character-level fallback for anything not in the map
+    text = _transliterate_remaining_devanagari(text)
     return text
 
 
@@ -74,7 +188,7 @@ PHONETIC_CORRECTIONS = {
     "mattan": "mutton", "gosht": "mutton",
     # Paneer variants
     "paner": "paneer", "panir": "paneer", "pneer": "paneer",
-    "pnir": "paneer",
+    "pnir": "paneer", "panee": "paneer", "paneera": "paneer",
     # Biryani variants
     "biriyani": "biryani", "briyani": "biryani", "biryni": "biryani",
     "biriani": "biryani", "bryani": "biryani", "biriyanee": "biryani",
@@ -168,6 +282,9 @@ FILLERS = {
     "kem", "saro",
     # Marathi
     "arey", "bro", "na",
+    # Hindi ordering verbs (transliterated from Devanagari)
+    "karna", "karana", "karo", "kar",
+    "dijiye", "kijiye", "banao", "lagao",
 }
 
 
@@ -182,7 +299,9 @@ def normalize(text: str) -> str:
     text = text.lower().strip()
 
     # Remove punctuation except spaces
-    text = re.sub(r"[^\w\s]", " ", text)
+    # Preserve Devanagari (U+0900-097F) and Gujarati (U+0A80-0AFF) blocks
+    # so matras / vowel signs survive for transliteration
+    text = re.sub(r"[^\w\s\u0900-\u097F\u0A80-\u0AFF]", " ", text)
 
     # Transliterate Devanagari -> romanized BEFORE number/filler processing
     text = _transliterate_devanagari(text)

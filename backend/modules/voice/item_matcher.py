@@ -50,6 +50,7 @@ SKIP_WORDS = {"aur", "and", "or", "ya", "bhi", "with", "dena", "lao",
               "chaar", "paanch", "chhe", "saat", "aath", "nau", "das",
               "gyaarah", "barah", "terah", "chaudah", "pandrah",
               "kuch", "sab", "wala", "wali", "wale",
+              "karna", "karana", "banao", "lagao", "dijiye", "kijiye",
               "e", "hi", "yeh", "woh", "kya",
               "jara", "zara", "deena", "na", "toh", "bas",
               # Common Hindi non-food words that phonetically resemble food items

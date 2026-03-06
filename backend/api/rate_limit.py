@@ -23,7 +23,7 @@ logger = logging.getLogger("petpooja.rate_limit")
 
 ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() in ("1", "true", "yes")
 _VOICE_RPM = int(os.getenv("RATE_LIMIT_VOICE_RPM", "20"))
-_REVENUE_RPM = int(os.getenv("RATE_LIMIT_REVENUE_RPM", "60"))
+_REVENUE_RPM = int(os.getenv("RATE_LIMIT_REVENUE_RPM", "200"))
 _DEFAULT_RPM = int(os.getenv("RATE_LIMIT_DEFAULT_RPM", "120"))
 
 # Sliding window size in seconds
