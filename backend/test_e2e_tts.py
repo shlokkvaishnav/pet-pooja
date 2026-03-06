@@ -30,7 +30,7 @@ async def main():
     print("\n[2/4] Loading voice pipeline from DB...")
     db = SessionLocal()
     items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
-    pipeline = VoicePipeline(db_session=db, menu_items=items)
+    pipeline = VoicePipeline(menu_items=items)
     print(f"  Menu items: {len(items)}")
 
     # 3. Process audio through pipeline
