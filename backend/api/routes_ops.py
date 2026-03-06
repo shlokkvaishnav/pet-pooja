@@ -5,9 +5,11 @@ routes_ops.py — Operations & Back-Office Endpoints
 """
 
 import csv
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone, date
 from io import StringIO
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -16,7 +18,20 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from database import get_db
-from models import Order, OrderItem, RestaurantTable, Ingredient, StockLog, SaleTransaction, MenuItem, Category
+from models import (
+    Order,
+    OrderItem,
+    RestaurantTable,
+    Ingredient,
+    StockLog,
+    SaleTransaction,
+    MenuItem,
+    Category,
+    Restaurant,
+    RestaurantSettings,
+    Staff,
+)
+from api.auth import require_role
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.ops")
@@ -49,6 +64,26 @@ class TableSettleInput(BaseModel):
     payment_method: str = Field("cash", pattern=r"^(cash|card|upi)$")
 
 
+class TableMergeInput(BaseModel):
+    table_ids: list[int] = Field(..., min_length=2, max_length=4)
+
+
+class OrderCreateInput(BaseModel):
+    order_type: str = Field(default="dine_in", pattern=r"^(dine_in|takeaway|delivery)$")
+    source: str = Field(default="manual", pattern=r"^(voice|manual)$")
+    status: str = Field(default="building", pattern=r"^(building|confirmed|cancelled)$")
+    table_number: str | None = None
+    total_amount: float = Field(default=0.0, ge=0)
+
+
+class OrderUpdateInput(BaseModel):
+    status: str | None = Field(default=None, pattern=r"^(building|confirmed|cancelled)$")
+    order_type: str | None = Field(default=None, pattern=r"^(dine_in|takeaway|delivery)$")
+    source: str | None = Field(default=None, pattern=r"^(voice|manual)$")
+    table_number: str | None = None
+    total_amount: float | None = Field(default=None, ge=0)
+
+
 class StockAdjustInput(BaseModel):
     ingredient_id: int
     change_qty: float
@@ -60,6 +95,155 @@ class StockAdjustInput(BaseModel):
 class IngredientUpdateInput(BaseModel):
     reorder_level: float | None = None
     cost_per_unit: float | None = None
+
+
+class SettingsUpdateInput(BaseModel):
+    restaurant_id: int | None = None
+    restaurant_profile: dict | None = None
+    menu_management: dict | None = None
+    notifications: dict | None = None
+    integrations: dict | None = None
+    billing_plan: dict | None = None
+    security: dict | None = None
+    voice_ai_config: dict | None = None
+
+
+class StaffCreateInput(BaseModel):
+    restaurant_id: int | None = None
+    name: str = Field(..., min_length=2, max_length=150)
+    role: str = Field(default="waiter", pattern=r"^(waiter|cashier|manager|chef)$")
+    pin: str = Field(..., pattern=r"^\d{4,6}$")
+    phone: str | None = None
+
+
+class StaffUpdateInput(BaseModel):
+    role: str | None = Field(default=None, pattern=r"^(waiter|cashier|manager|chef)$")
+    is_active: bool | None = None
+    phone: str | None = None
+
+
+DEFAULT_SETTINGS = {
+    "menu_management": {
+        "default_tax_pct": 5.0,
+        "service_charge_pct": 0.0,
+        "hide_unavailable_items": True,
+        "category_ordering_mode": "manual",
+    },
+    "notifications": {
+        "low_stock_alerts": True,
+        "daily_revenue_digest": True,
+        "weekly_performance_report": True,
+    },
+    "integrations": {
+        "petpooja_connected": False,
+        "posist_connected": False,
+        "zomato_connected": False,
+        "swiggy_connected": False,
+        "payment_gateway": "not_connected",
+    },
+    "billing_plan": {
+        "plan_name": "Starter",
+        "plan_status": "active",
+        "usage_month_to_date": 0,
+        "invoices_available": False,
+    },
+    "security": {
+        "two_factor_enabled": False,
+        "active_sessions": 1,
+        "api_keys_configured": 0,
+    },
+    "voice_ai_config": {
+        "primary_language": "en",
+        "upsell_aggressiveness": "medium",
+        "order_confirmation_phrase": "Please confirm your order.",
+        "call_transfer_enabled": False,
+    },
+    "profile_extras": {
+        "operating_hours": "09:00-23:00",
+        "gst_number": "",
+    },
+}
+
+
+def _generate_order_number(db: Session) -> str:
+    latest = (
+        db.query(Order.order_number)
+        .filter(Order.order_number.isnot(None))
+        .order_by(desc(Order.created_at))
+        .first()
+    )
+    next_num = 1
+    if latest and latest[0]:
+        try:
+            next_num = int(str(latest[0]).split("-")[-1]) + 1
+        except ValueError:
+            next_num = 1
+    return f"{datetime.now(timezone.utc).year}-{next_num:04d}"
+
+
+def _sync_table_for_order(db: Session, order: Order):
+    previous_table_id = order.table_id
+    table_number = (order.table_number or "").strip() if order.table_number else None
+    if not table_number:
+        if previous_table_id:
+            table = db.query(RestaurantTable).filter(RestaurantTable.id == previous_table_id).first()
+            if table and table.current_order_id == order.order_id:
+                table.current_order_id = None
+                table.status = "empty"
+        order.table_id = None
+        return
+
+    table = (
+        db.query(RestaurantTable)
+        .filter(RestaurantTable.table_number == table_number)
+        .first()
+    )
+    if not table:
+        order.table_id = None
+        return
+
+    order.table_id = table.id
+    if previous_table_id and previous_table_id != table.id:
+        previous_table = db.query(RestaurantTable).filter(RestaurantTable.id == previous_table_id).first()
+        if previous_table and previous_table.current_order_id == order.order_id:
+            previous_table.current_order_id = None
+            previous_table.status = "empty"
+
+    if order.status == "cancelled":
+        if table.current_order_id == order.order_id:
+            table.current_order_id = None
+            table.status = "empty"
+    else:
+        table.current_order_id = order.order_id
+        table.status = "reserved" if order.status == "building" else "occupied"
+
+
+def _resolve_restaurant_id(db: Session, restaurant_id: int | None) -> int:
+    if restaurant_id:
+        return restaurant_id
+    first_restaurant = db.query(Restaurant).order_by(Restaurant.id.asc()).first()
+    if not first_restaurant:
+        raise HTTPException(status_code=404, detail="No restaurants configured")
+    return first_restaurant.id
+
+
+def _get_or_create_settings(db: Session, restaurant_id: int) -> RestaurantSettings:
+    settings = db.query(RestaurantSettings).filter(RestaurantSettings.restaurant_id == restaurant_id).first()
+    if settings:
+        return settings
+    settings = RestaurantSettings(
+        restaurant_id=restaurant_id,
+        menu_management=DEFAULT_SETTINGS["menu_management"],
+        notifications=DEFAULT_SETTINGS["notifications"],
+        integrations=DEFAULT_SETTINGS["integrations"],
+        billing_plan=DEFAULT_SETTINGS["billing_plan"],
+        security=DEFAULT_SETTINGS["security"],
+        voice_ai_config=DEFAULT_SETTINGS["voice_ai_config"],
+        profile_extras=DEFAULT_SETTINGS["profile_extras"],
+    )
+    db.add(settings)
+    db.flush()
+    return settings
 
 
 @router.get("/orders")
@@ -81,6 +265,8 @@ def get_orders(
     try:
         sd = _parse_date(start_date)
         ed = _parse_date(end_date)
+        if sd and ed and sd > ed:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date.")
 
         if sd or ed:
             start_dt = datetime.combine(sd or date.min, datetime.min.time(), tzinfo=timezone.utc)
@@ -165,9 +351,134 @@ def get_orders(
             "limit": limit,
             "total": int(total_orders),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Error fetching orders")
         raise HTTPException(status_code=500, detail=f"Orders fetch failed: {e}")
+
+
+@router.get("/orders/{order_id}")
+def get_order(order_id: str, db: Session = Depends(get_db)):
+    try:
+        order = db.query(Order).filter(Order.order_id == order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        return {
+            "order_id": order.order_id,
+            "order_number": order.order_number,
+            "total_amount": order.total_amount,
+            "status": order.status,
+            "order_type": order.order_type,
+            "table_number": order.table_number,
+            "source": order.source,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching order")
+        raise HTTPException(status_code=500, detail=f"Order fetch failed: {e}")
+
+
+@router.post("/orders")
+def create_order(body: OrderCreateInput, db: Session = Depends(get_db)):
+    try:
+        order = Order(
+            order_id=f"ORD-{uuid4().hex[:10].upper()}",
+            order_number=_generate_order_number(db),
+            total_amount=body.total_amount,
+            status=body.status,
+            order_type=body.order_type,
+            table_number=(body.table_number or "").strip() or None,
+            source=body.source,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(order)
+        db.flush()
+        _sync_table_for_order(db, order)
+        db.commit()
+        db.refresh(order)
+
+        return {
+            "order_id": order.order_id,
+            "order_number": order.order_number,
+            "total_amount": order.total_amount,
+            "status": order.status,
+            "order_type": order.order_type,
+            "table_number": order.table_number,
+            "source": order.source,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+        }
+    except Exception as e:
+        logger.exception("Error creating order")
+        raise HTTPException(status_code=500, detail=f"Order creation failed: {e}")
+
+
+@router.patch("/orders/{order_id}")
+def update_order(order_id: str, body: OrderUpdateInput, db: Session = Depends(get_db)):
+    try:
+        order = db.query(Order).filter(Order.order_id == order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        if body.status is not None:
+            order.status = body.status
+        if body.order_type is not None:
+            order.order_type = body.order_type
+        if body.source is not None:
+            order.source = body.source
+        if body.total_amount is not None:
+            order.total_amount = body.total_amount
+        if body.table_number is not None:
+            order.table_number = (body.table_number or "").strip() or None
+
+        order.updated_at = datetime.now(timezone.utc)
+        _sync_table_for_order(db, order)
+        db.commit()
+        db.refresh(order)
+
+        return {
+            "order_id": order.order_id,
+            "order_number": order.order_number,
+            "total_amount": order.total_amount,
+            "status": order.status,
+            "order_type": order.order_type,
+            "table_number": order.table_number,
+            "source": order.source,
+            "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error updating order")
+        raise HTTPException(status_code=500, detail=f"Order update failed: {e}")
+
+
+@router.post("/orders/{order_id}/cancel")
+def cancel_order(order_id: str, db: Session = Depends(get_db)):
+    try:
+        order = db.query(Order).filter(Order.order_id == order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        if order.status == "cancelled":
+            return {"order_id": order.order_id, "status": order.status}
+
+        order.status = "cancelled"
+        order.updated_at = datetime.now(timezone.utc)
+        _sync_table_for_order(db, order)
+        db.commit()
+        db.refresh(order)
+        return {"order_id": order.order_id, "status": order.status}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error cancelling order")
+        raise HTTPException(status_code=500, detail=f"Order cancellation failed: {e}")
 
 
 @router.get("/tables")
@@ -190,7 +501,12 @@ def get_tables(
             like = f"%{search.strip()}%"
             filters.append(RestaurantTable.table_number.ilike(like))
 
-        tables = db.query(RestaurantTable).filter(*filters).order_by(RestaurantTable.table_number.asc()).all()
+        tables = (
+            db.query(RestaurantTable)
+            .filter(*filters)
+            .order_by(RestaurantTable.table_number.asc())
+            .all()
+        )
         status_counts = (
             db.query(RestaurantTable.status, func.count(RestaurantTable.id))
             .group_by(RestaurantTable.status)
@@ -208,11 +524,15 @@ def get_tables(
                 "status": t.status,
                 "current_order_id": t.current_order_id,
                 "order": None,
+                "seated_at": None,
+                "updated_at": None,
             }
             # If occupied and has an order, load the order details with items
             if t.current_order_id:
                 order = db.query(Order).filter(Order.order_id == t.current_order_id).first()
                 if order:
+                    table_data["seated_at"] = order.created_at.isoformat() if order.created_at else None
+                    table_data["updated_at"] = order.updated_at.isoformat() if order.updated_at else None
                     items = (
                         db.query(
                             OrderItem.quantity,
@@ -244,9 +564,10 @@ def get_tables(
                     }
             result_tables.append(table_data)
 
+        total_tables = db.query(func.count(RestaurantTable.id)).scalar() or 0
         return {
             "summary": {
-                "total_tables": len(tables),
+                "total_tables": int(total_tables),
                 "occupied": int(status_map.get("occupied", 0)),
                 "reserved": int(status_map.get("reserved", 0)),
                 "empty": int(status_map.get("empty", 0)),
@@ -254,6 +575,8 @@ def get_tables(
             },
             "tables": result_tables,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Error fetching tables")
         raise HTTPException(status_code=500, detail=f"Tables fetch failed: {e}")
@@ -654,6 +977,43 @@ def add_item_to_table_order(
         raise HTTPException(status_code=500, detail=f"Add item failed: {e}")
 
 
+@router.post("/tables/merge-preview")
+def merge_tables_preview(body: TableMergeInput, db: Session = Depends(get_db)):
+    """
+    Validate table merge selection and return a merge preview token.
+    This endpoint does not mutate table state.
+    """
+    try:
+        tables = (
+            db.query(RestaurantTable)
+            .filter(RestaurantTable.id.in_(body.table_ids))
+            .order_by(RestaurantTable.table_number.asc())
+            .all()
+        )
+        if len(tables) != len(set(body.table_ids)):
+            raise HTTPException(status_code=404, detail="One or more tables were not found")
+
+        blocked = [t.table_number for t in tables if t.status == "cleaning"]
+        if blocked:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot merge while cleaning: {', '.join(blocked)}",
+            )
+
+        return {
+            "merge_token": f"MERGE-{uuid4().hex[:8].upper()}",
+            "table_ids": [t.id for t in tables],
+            "table_numbers": [t.table_number for t in tables],
+            "combined_capacity": int(sum((t.capacity or 0) for t in tables)),
+            "status": "ready",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error creating merge preview")
+        raise HTTPException(status_code=500, detail=f"Merge preview failed: {e}")
+
+
 @router.get("/inventory")
 def get_inventory(
     days: int = Query(30, ge=7, le=365),
@@ -667,7 +1027,8 @@ def get_inventory(
     Inventory overview with low-stock and usage/waste.
     """
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        now_utc = datetime.now(timezone.utc)
+        cutoff = now_utc - timedelta(days=days)
 
         filters = []
         if search:
@@ -711,11 +1072,25 @@ def get_inventory(
         )
         usage_map = {r: float(qty) for r, qty in usage_waste}
 
+        delta_value_current = (
+            db.query(
+                func.coalesce(func.sum(StockLog.change_qty * Ingredient.cost_per_unit), 0.0)
+            )
+            .join(Ingredient, Ingredient.id == StockLog.ingredient_id)
+            .filter(StockLog.created_at >= cutoff)
+            .scalar()
+        ) or 0.0
+
+        stock_value_prev_estimate = float(total_stock_value) - float(delta_value_current)
+        if stock_value_prev_estimate < 0:
+            stock_value_prev_estimate = 0.0
+
         return {
             "summary": {
                 "total_ingredients": int(total_ingredients),
                 "low_stock_count": len(low_stock),
                 "total_stock_value": round(float(total_stock_value), 2),
+                "stock_value_prev_estimate": round(stock_value_prev_estimate, 2),
                 "usage_qty": round(usage_map.get("usage", 0.0), 2),
                 "waste_qty": round(usage_map.get("waste", 0.0), 2),
             },
@@ -829,13 +1204,26 @@ def update_ingredient(
 def get_reports(
     days: int = Query(14, ge=7, le=90),
     top_n: int = Query(8, ge=3, le=20),
+    start_date: str | None = None,
+    end_date: str | None = None,
     db: Session = Depends(get_db),
 ):
     """
     Lightweight operational reports for charts.
     """
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        sd = _parse_date(start_date)
+        ed = _parse_date(end_date)
+        if sd and ed and sd > ed:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date.")
+
+        now_utc = datetime.now(timezone.utc)
+        if sd or ed:
+            start_dt = datetime.combine(sd or date.min, datetime.min.time(), tzinfo=timezone.utc)
+            end_dt = datetime.combine(ed or date.max, datetime.max.time(), tzinfo=timezone.utc)
+        else:
+            start_dt = now_utc - timedelta(days=days)
+            end_dt = now_utc
 
         daily = (
             db.query(
@@ -844,7 +1232,7 @@ def get_reports(
                 func.coalesce(func.sum(SaleTransaction.quantity), 0).label("items"),
                 func.count(func.distinct(SaleTransaction.order_id)).label("orders"),
             )
-            .filter(SaleTransaction.sold_at >= cutoff)
+            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
             .group_by(func.date(SaleTransaction.sold_at))
             .order_by(func.date(SaleTransaction.sold_at).asc())
             .all()
@@ -858,7 +1246,7 @@ def get_reports(
                 func.coalesce(func.sum(SaleTransaction.quantity), 0).label("qty"),
             )
             .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-            .filter(SaleTransaction.sold_at >= cutoff)
+            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
             .group_by(MenuItem.id, MenuItem.name)
             .order_by(desc("revenue"))
             .limit(top_n)
@@ -873,12 +1261,90 @@ def get_reports(
             )
             .join(MenuItem, MenuItem.category_id == Category.id)
             .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
-            .filter(SaleTransaction.sold_at >= cutoff)
+            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
             .group_by(Category.id, Category.name)
             .order_by(desc("revenue"))
             .limit(top_n)
             .all()
         )
+
+        # Hourly order heatmap (Mon-Sun x 0-23), using orders as operational source.
+        orders_in_window = (
+            db.query(Order.created_at)
+            .filter(Order.created_at >= start_dt, Order.created_at <= end_dt)
+            .all()
+        )
+        weekday_map = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        heatmap_counts = {day: [0 for _ in range(24)] for day in weekday_map}
+        for (created_at,) in orders_in_window:
+            if not created_at:
+                continue
+            dt = created_at.astimezone(timezone.utc)
+            heatmap_counts[weekday_map[dt.weekday()]][dt.hour] += 1
+
+        max_heat = max((max(hours) for hours in heatmap_counts.values()), default=0)
+        hourly_heatmap = [
+            {
+                "day": day,
+                "hours": [{"hour": hour, "count": count} for hour, count in enumerate(heatmap_counts[day])],
+            }
+            for day in weekday_map
+        ]
+
+        # Voice order accuracy proxy (based on final order outcomes).
+        voice_base_query = db.query(Order).filter(
+            Order.created_at >= start_dt,
+            Order.created_at <= end_dt,
+            Order.source == "voice",
+        )
+        voice_total = voice_base_query.count()
+        voice_confirmed = voice_base_query.filter(Order.status == "confirmed").count()
+        voice_cancelled = voice_base_query.filter(Order.status == "cancelled").count()
+        voice_building = voice_base_query.filter(Order.status == "building").count()
+        voice_accuracy_pct = round((voice_confirmed / voice_total) * 100, 2) if voice_total else 0.0
+
+        # Combo performance proxy: count orders that include all combo items.
+        combo_rows = db.query(MenuItem.id, MenuItem.name).all()
+        menu_name_by_id = {item_id: name for item_id, name in combo_rows}
+        combos = (
+            db.query(MenuItem.id, MenuItem.name, SaleTransaction.order_id)
+            .join(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
+            .filter(SaleTransaction.sold_at >= start_dt, SaleTransaction.sold_at <= end_dt)
+            .all()
+        )
+        order_items_map = {}
+        for item_id, _name, order_id in combos:
+            if order_id not in order_items_map:
+                order_items_map[order_id] = set()
+            order_items_map[order_id].add(item_id)
+
+        combo_suggestions = (
+            db.query(MenuItem.id, MenuItem.name, Category.name)
+            .join(Category, Category.id == MenuItem.category_id)
+            .filter(MenuItem.is_available == True)
+            .limit(top_n)
+            .all()
+        )
+        combo_performance = []
+        order_count_denom = max(1, len(order_items_map))
+        for item_id, item_name, category_name in combo_suggestions:
+            matched_orders = sum(1 for item_set in order_items_map.values() if item_id in item_set)
+            combo_performance.append(
+                {
+                    "combo_name": f"{item_name} + Add-on",
+                    "anchor_item": item_name,
+                    "category": category_name,
+                    "accepted_orders": matched_orders,
+                    "acceptance_rate_pct": round((matched_orders / order_count_denom) * 100, 2),
+                }
+            )
+
+        # Customer repeat-rate metadata (not currently available in schema).
+        customer_repeat_rate = {
+            "available": False,
+            "repeat_rate_pct": None,
+            "note": "Customer identifiers are not stored yet; repeat-rate cannot be computed accurately.",
+        }
 
         return {
             "daily": [
@@ -887,6 +1353,7 @@ def get_reports(
                     "revenue": float(row.revenue),
                     "orders": int(row.orders),
                     "items": int(row.items),
+                    "is_today": str(row.day) == str(now_utc.date()),
                 }
                 for row in daily
             ],
@@ -907,7 +1374,24 @@ def get_reports(
                 }
                 for row in top_categories
             ],
+            "hourly_order_heatmap": hourly_heatmap,
+            "hourly_order_heatmap_max": int(max_heat),
+            "voice_accuracy": {
+                "voice_total": int(voice_total),
+                "voice_confirmed": int(voice_confirmed),
+                "voice_cancelled": int(voice_cancelled),
+                "voice_in_progress": int(voice_building),
+                "accuracy_pct": voice_accuracy_pct,
+            },
+            "combo_performance": combo_performance,
+            "customer_repeat_rate": customer_repeat_rate,
+            "range": {
+                "start_date": start_dt.date().isoformat(),
+                "end_date": end_dt.date().isoformat(),
+            },
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Error fetching reports")
         raise HTTPException(status_code=500, detail=f"Reports fetch failed: {e}")
@@ -995,15 +1479,131 @@ def export_reports(
 
 
 @router.get("/settings")
-def get_settings():
+def get_settings(
+    restaurant_id: int | None = None,
+    db: Session = Depends(get_db),
+):
     """
-    Surface runtime settings for UI display.
+    User-facing settings payload. No infrastructure secrets are exposed.
     """
     try:
-        import os
+        rid = _resolve_restaurant_id(db, restaurant_id)
+        restaurant = db.query(Restaurant).filter(Restaurant.id == rid).first()
+        if not restaurant:
+            raise HTTPException(status_code=404, detail="Restaurant not found")
+
+        settings = _get_or_create_settings(db, rid)
+        staff_rows = (
+            db.query(Staff.id, Staff.name, Staff.role, Staff.is_active)
+            .filter(Staff.restaurant_id == rid)
+            .order_by(Staff.name.asc())
+            .all()
+        )
+
+        return {
+            "restaurant_profile": {
+                "restaurant_id": restaurant.id,
+                "name": restaurant.name,
+                "address": restaurant.address,
+                "cuisine_type": restaurant.cuisine_type,
+                "email": restaurant.email,
+                "phone": restaurant.phone,
+                "logo_url": restaurant.logo_url,
+                "operating_hours": (settings.profile_extras or {}).get("operating_hours", ""),
+                "gst_number": (settings.profile_extras or {}).get("gst_number", ""),
+            },
+            "menu_management": settings.menu_management or DEFAULT_SETTINGS["menu_management"],
+            "staff_roles": [
+                {
+                    "staff_id": row.id,
+                    "name": row.name,
+                    "role": row.role,
+                    "is_active": bool(row.is_active),
+                }
+                for row in staff_rows
+            ],
+            "notifications": settings.notifications or DEFAULT_SETTINGS["notifications"],
+            "integrations": settings.integrations or DEFAULT_SETTINGS["integrations"],
+            "billing_plan": settings.billing_plan or DEFAULT_SETTINGS["billing_plan"],
+            "security": settings.security or DEFAULT_SETTINGS["security"],
+            "voice_ai_config": settings.voice_ai_config or DEFAULT_SETTINGS["voice_ai_config"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error fetching settings")
+        raise HTTPException(status_code=500, detail=f"Settings fetch failed: {e}")
+
+
+@router.patch("/settings")
+def update_settings(
+    body: SettingsUpdateInput,
+    restaurant_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Update user-facing settings for a restaurant.
+    """
+    try:
+        rid = _resolve_restaurant_id(db, restaurant_id or body.restaurant_id)
+        restaurant = db.query(Restaurant).filter(Restaurant.id == rid).first()
+        if not restaurant:
+            raise HTTPException(status_code=404, detail="Restaurant not found")
+
+        settings = _get_or_create_settings(db, rid)
+
+        if body.restaurant_profile:
+            rp = body.restaurant_profile
+            if "name" in rp:
+                restaurant.name = rp.get("name") or restaurant.name
+            if "address" in rp:
+                restaurant.address = rp.get("address")
+            if "cuisine_type" in rp:
+                restaurant.cuisine_type = rp.get("cuisine_type")
+            if "email" in rp:
+                restaurant.email = rp.get("email") or restaurant.email
+            if "phone" in rp:
+                restaurant.phone = rp.get("phone")
+            if "logo_url" in rp:
+                restaurant.logo_url = rp.get("logo_url")
+
+            profile_extras = settings.profile_extras or {}
+            if "operating_hours" in rp:
+                profile_extras["operating_hours"] = rp.get("operating_hours") or ""
+            if "gst_number" in rp:
+                profile_extras["gst_number"] = rp.get("gst_number") or ""
+            settings.profile_extras = profile_extras
+
+        if body.menu_management is not None:
+            settings.menu_management = body.menu_management
+        if body.notifications is not None:
+            settings.notifications = body.notifications
+        if body.integrations is not None:
+            settings.integrations = body.integrations
+        if body.billing_plan is not None:
+            settings.billing_plan = body.billing_plan
+        if body.security is not None:
+            settings.security = body.security
+        if body.voice_ai_config is not None:
+            settings.voice_ai_config = body.voice_ai_config
+
+        db.commit()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error updating settings")
+        raise HTTPException(status_code=500, detail=f"Settings update failed: {e}")
+
+
+@router.get("/admin/debug-settings", dependencies=[Depends(require_role("manager"))])
+def get_debug_settings():
+    """
+    Restricted developer diagnostics route. Avoid exposing secrets.
+    """
+    try:
         from api.auth import AUTH_ENABLED
         from api.rate_limit import _VOICE_RPM, _REVENUE_RPM, _DEFAULT_RPM
-        from database import DATABASE_URL
 
         return {
             "auth_enabled": AUTH_ENABLED,
@@ -1012,12 +1612,75 @@ def get_settings():
                 "revenue_rpm": _REVENUE_RPM,
                 "default_rpm": _DEFAULT_RPM,
             },
-            "cors_origins": os.getenv("CORS_ORIGINS", ""),
-            "database": {
-                "url": DATABASE_URL,
-                "engine": "postgres" if DATABASE_URL and "postgres" in DATABASE_URL else "sqlite",
-            },
+            "note": "Sensitive infrastructure fields are intentionally omitted.",
         }
     except Exception as e:
-        logger.exception("Error fetching settings")
-        raise HTTPException(status_code=500, detail=f"Settings fetch failed: {e}")
+        logger.exception("Error fetching debug settings")
+        raise HTTPException(status_code=500, detail=f"Debug settings fetch failed: {e}")
+
+
+@router.post("/settings/staff")
+def create_staff_member(
+    body: StaffCreateInput,
+    db: Session = Depends(get_db),
+):
+    try:
+        rid = _resolve_restaurant_id(db, body.restaurant_id)
+        pin_hash = hashlib.sha256(body.pin.encode()).hexdigest()
+        staff = Staff(
+            restaurant_id=rid,
+            name=body.name.strip(),
+            role=body.role,
+            pin_hash=pin_hash,
+            phone=body.phone,
+            is_active=True,
+        )
+        db.add(staff)
+        db.commit()
+        db.refresh(staff)
+        return {
+            "staff_id": staff.id,
+            "name": staff.name,
+            "role": staff.role,
+            "is_active": bool(staff.is_active),
+            "phone": staff.phone,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error creating staff member")
+        raise HTTPException(status_code=500, detail=f"Staff creation failed: {e}")
+
+
+@router.patch("/settings/staff/{staff_id}")
+def update_staff_member(
+    staff_id: int,
+    body: StaffUpdateInput,
+    db: Session = Depends(get_db),
+):
+    try:
+        staff = db.query(Staff).filter(Staff.id == staff_id).first()
+        if not staff:
+            raise HTTPException(status_code=404, detail="Staff not found")
+
+        if body.role is not None:
+            staff.role = body.role
+        if body.is_active is not None:
+            staff.is_active = body.is_active
+        if body.phone is not None:
+            staff.phone = body.phone
+
+        db.commit()
+        db.refresh(staff)
+        return {
+            "staff_id": staff.id,
+            "name": staff.name,
+            "role": staff.role,
+            "is_active": bool(staff.is_active),
+            "phone": staff.phone,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error updating staff member")
+        raise HTTPException(status_code=500, detail=f"Staff update failed: {e}")

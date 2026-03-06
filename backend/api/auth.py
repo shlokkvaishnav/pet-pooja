@@ -21,9 +21,26 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger("petpooja.auth")
 
+
+def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int | None = None) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default %d", name, raw, default)
+        return default
+    if value < min_value:
+        logger.warning("%s must be >= %d; using default %d", name, min_value, default)
+        return default
+    if max_value is not None and value > max_value:
+        logger.warning("%s must be <= %d; using default %d", name, max_value, default)
+        return default
+    return value
+
+
 _JWT_SECRET = os.getenv("JWT_SECRET", "")
 _JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-_JWT_DEFAULT_EXPIRY_HOURS = int(os.getenv("JWT_DEFAULT_EXPIRY_HOURS", "8"))
+_JWT_DEFAULT_EXPIRY_HOURS = _env_int("JWT_DEFAULT_EXPIRY_HOURS", 8, min_value=1, max_value=12)
 
 # When True, all endpoints require a valid JWT.
 # Set to False (or unset) during development to keep current open behavior.

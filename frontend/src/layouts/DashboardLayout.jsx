@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Target, Link2, Mic, ClipboardList,
+  LayoutDashboard, Target, Link2, ClipboardList,
   LayoutGrid, Archive, BarChart3, Settings, LogOut,
-  ChevronsRight, HelpCircle,
+  ChevronsRight, Mic,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -20,7 +20,6 @@ const navGroups = [
     label: 'Operations',
     items: [
       { to: '/dashboard/combos', icon: Link2, label: 'Combo Engine' },
-      { to: '/dashboard/voice-order', icon: Mic, label: 'Voice Order' },
       { to: '/dashboard/orders', icon: ClipboardList, label: 'Orders' },
       { to: '/dashboard/tables', icon: LayoutGrid, label: 'Tables' },
       { to: '/dashboard/inventory', icon: Archive, label: 'Inventory' },
@@ -38,7 +37,9 @@ const navGroups = [
 export default function DashboardLayout() {
   const [open, setOpen] = useState(true)
   const navigate = useNavigate()
+  const location = useLocation()
   const { logout, restaurant } = useAuth()
+  const onVoiceOrderPage = location.pathname === '/dashboard/voice-order'
 
   return (
     <div className="app-layout">
@@ -64,15 +65,8 @@ export default function DashboardLayout() {
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.2 }}
               >
-                <div style={{
-                  fontSize: '9px',
-                  fontWeight: 800,
-                  letterSpacing: '0.15em',
-                  textTransform: 'uppercase',
-                  color: 'var(--accent)',
-                  marginBottom: '2px'
-                }}>Sizzle</div>
-                <h2 style={{ fontSize: '16px' }}>{restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}</h2>
+                <div className="sidebar-brand-kicker">Sizzle</div>
+                <h2>{restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}</h2>
               </motion.div>
             )}
           </div>
@@ -91,7 +85,18 @@ export default function DashboardLayout() {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.35 + (gi * 2 + i) * 0.06, duration: 0.3 }}
                   >
-                    <NavLink to={item.to} end={item.end} title={!open ? item.label : undefined}>
+                    <NavLink
+                      to={item.to}
+                      end={item.end}
+                      className={({ isActive }) => {
+                        const states = []
+                        if (isActive) states.push('active')
+                        if (!open) states.push('nav-link--icon-only')
+                        return states.join(' ')
+                      }}
+                      data-tooltip={!open ? item.label : undefined}
+                      aria-label={!open ? item.label : undefined}
+                    >
                       <span className="nav-icon">
                         <item.icon size={18} />
                       </span>
@@ -106,24 +111,15 @@ export default function DashboardLayout() {
 
         {/* Footer */}
         <div className="sidebar-footer">
-          {open && (
-            <button
-              className="sidebar-logout"
-              onClick={() => { logout(); navigate('/login') }}
-            >
-              <LogOut size={14} />
-              Logout
-            </button>
-          )}
-          {!open && (
-            <button
-              className="sidebar-logout sidebar-logout--icon"
-              onClick={() => { logout(); navigate('/login') }}
-              title="Logout"
-            >
-              <LogOut size={16} />
-            </button>
-          )}
+          <button
+            className={`sidebar-logout ${!open ? 'sidebar-logout--icon' : ''}`}
+            onClick={() => { logout(); navigate('/login') }}
+            title={!open ? 'Logout' : undefined}
+            aria-label={!open ? 'Logout' : undefined}
+          >
+            <LogOut size={16} />
+            {open && <span>Logout</span>}
+          </button>
         </div>
 
         {/* Collapse toggle */}
@@ -144,6 +140,17 @@ export default function DashboardLayout() {
       <main className={`main-content ${open ? '' : 'main-content--expanded'}`}>
         <Outlet />
       </main>
+
+      {!onVoiceOrderPage && (
+        <button
+          className="dashboard-voice-fab"
+          onClick={() => navigate('/dashboard/voice-order')}
+          title="Start Voice Order"
+        >
+          <Mic size={18} />
+          <span>Voice Order</span>
+        </button>
+      )}
     </div>
   )
 }

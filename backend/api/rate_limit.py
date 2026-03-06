@@ -14,17 +14,31 @@ Env vars:
 import os
 import time
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 from threading import Lock
 
 from fastapi import Request, HTTPException, status
 
 logger = logging.getLogger("petpooja.rate_limit")
 
+
+def _env_int(name: str, default: int, *, min_value: int = 1) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default %d", name, raw, default)
+        return default
+    if value < min_value:
+        logger.warning("%s must be >= %d; using default %d", name, min_value, default)
+        return default
+    return value
+
+
 ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() in ("1", "true", "yes")
-_VOICE_RPM = int(os.getenv("RATE_LIMIT_VOICE_RPM", "20"))
-_REVENUE_RPM = int(os.getenv("RATE_LIMIT_REVENUE_RPM", "200"))
-_DEFAULT_RPM = int(os.getenv("RATE_LIMIT_DEFAULT_RPM", "120"))
+_VOICE_RPM = _env_int("RATE_LIMIT_VOICE_RPM", 20)
+_REVENUE_RPM = _env_int("RATE_LIMIT_REVENUE_RPM", 200)
+_DEFAULT_RPM = _env_int("RATE_LIMIT_DEFAULT_RPM", 120)
 
 # Sliding window size in seconds
 _WINDOW = 60
@@ -35,8 +49,8 @@ class _RateLimiter:
 
     def __init__(self):
         self._lock = Lock()
-        # key -> list of timestamps
-        self._hits: dict[str, list[float]] = defaultdict(list)
+        # key -> deque of timestamps (O(1) eviction from left)
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._last_cleanup = time.time()
 
     def check(self, key: str, max_requests: int) -> bool:
@@ -55,7 +69,7 @@ class _RateLimiter:
             timestamps = self._hits[key]
             # Remove expired timestamps
             while timestamps and timestamps[0] < cutoff:
-                timestamps.pop(0)
+                timestamps.popleft()
 
             if len(timestamps) >= max_requests:
                 return False
@@ -98,7 +112,9 @@ async def rate_limit_middleware(request: Request, call_next):
 
     client_ip = _get_client_ip(request)
     rpm = _get_limit_for_path(request.url.path)
-    key = f"{client_ip}:{request.url.path.split('/')[2] if len(request.url.path.split('/')) > 2 else 'root'}"
+    path_parts = request.url.path.split("/")
+    route_group = path_parts[2] if len(path_parts) > 2 else "root"
+    key = f"{client_ip}:{route_group}"
 
     if not _limiter.check(key, rpm):
         logger.warning("Rate limit exceeded: %s on %s (%d RPM)", client_ip, request.url.path, rpm)

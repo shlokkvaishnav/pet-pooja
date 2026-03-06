@@ -34,6 +34,7 @@ _ALLOWED_ORIGINS = os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
 ).split(",")
+_ALLOWED_ORIGINS = [origin.strip() for origin in _ALLOWED_ORIGINS if origin.strip()]
 
 
 def _run_auto_migrations(eng):
@@ -43,7 +44,7 @@ def _run_auto_migrations(eng):
     from sqlalchemy import inspect as sa_inspect, text
     inspector = sa_inspect(eng)
     is_pg = "postgres" in str(eng.url)
-    for table in Base.metadata.sorted_tables:
+    for table in Base.metadata.tables.values():
         if not inspector.has_table(table.name):
             continue  # create_all will handle new tables
         existing_cols = {c["name"] for c in inspector.get_columns(table.name)}
@@ -68,28 +69,24 @@ def _run_auto_migrations(eng):
                 logger.debug("Column %s.%s skipped: %s", table.name, col.name, exc)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Create DB tables and load VoicePipeline with menu data from DB."""
-    Base.metadata.create_all(bind=engine)
-    _run_auto_migrations(engine)
-    logger.info("Petpooja AI Copilot — Server ready")
-    logger.info("Revenue engine loaded")
-
-    # -- PRE-LOAD: Warm up ML models before the first request arrives --
+def _background_warmup(app_state):
+    """Run heavy ML model warmups in a background thread so the server
+    starts accepting requests immediately."""
+    # -- Whisper STT --
     try:
         from modules.voice.stt import warmup as stt_warmup
         stt_warmup()
     except Exception as e:
         logger.warning(f"Whisper model warmup failed (will lazy-load on first request): {e}")
 
+    # -- Semantic model --
     try:
         from modules.voice.item_matcher import warmup_semantic_model
         warmup_semantic_model()
     except Exception as e:
         logger.warning(f"Semantic model warmup failed (will lazy-load on first use): {e}")
 
-    # -- PRE-LOAD: Warm up Indic Parler TTS engine --
+    # -- TTS engine --
     try:
         from modules.voice.voice_config import cfg as voice_cfg
         if voice_cfg.TTS_ENABLED:
@@ -100,7 +97,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"TTS engine warmup failed (TTS will be unavailable): {e}")
 
-    # -- VERIFY: Ollama LLM reachability --
+    # -- Ollama LLM reachability --
     try:
         from modules.voice.voice_config import cfg as voice_cfg
         if voice_cfg.LLM_ENABLED:
@@ -120,7 +117,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Ollama check failed: {e}")
 
-    # -- DYNAMIC: Load menu from DATABASE --
+    logger.info("Background warmup complete — all ML models ready")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create DB tables and load VoicePipeline with menu data from DB."""
+    import threading
+
+    Base.metadata.create_all(bind=engine)
+    _run_auto_migrations(engine)
+
+    # -- DYNAMIC: Load menu from DATABASE (fast — just a DB query) --
     db = SessionLocal()
     try:
         from models import MenuItem
@@ -151,6 +159,18 @@ async def lifespan(app: FastAPI):
         start_combo_scheduler(SessionLocal)
     except Exception as e:
         logger.warning(f"Combo scheduler failed to start: {e}")
+
+    # -- DEFERRED: Heavy ML warmups in a background thread --
+    warmup_thread = threading.Thread(
+        target=_background_warmup,
+        args=(app.state,),
+        daemon=True,
+        name="ml-warmup",
+    )
+    warmup_thread.start()
+
+    logger.info("Petpooja AI Copilot — Server ready (ML models warming up in background)")
+    logger.info("Revenue engine loaded")
 
     yield
     # -- Shutdown: stop combo scheduler --
@@ -185,9 +205,13 @@ app.middleware("http")(rate_limit_middleware)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    include_detail = os.getenv("EXPOSE_ERROR_DETAILS", "false").lower() in ("1", "true", "yes")
+    content = {"error": "Internal server error"}
+    if include_detail:
+        content["detail"] = str(exc)
     return JSONResponse(
         status_code=500,
-        content={"error": "Internal server error", "detail": str(exc)},
+        content=content,
     )
 
 

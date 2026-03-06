@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
+import { motion, AnimatePresence } from 'motion/react'
 import {
   getOpsTablesFiltered,
   bookTable,
@@ -9,38 +10,26 @@ import {
   getMenuItemsList,
   addItemToTableOrder,
 } from '../api/client'
-import { motion, AnimatePresence } from 'motion/react'
 
-/* ── Color mapping for table statuses ── */
-const STATUS_CONFIG = {
-  empty: {
-    label: 'Available',
-    color: '#22c55e',
-    bg: 'rgba(34, 197, 94, 0.08)',
-    border: 'rgba(34, 197, 94, 0.25)',
-    glow: 'rgba(34, 197, 94, 0.12)',
-  },
-  reserved: {
-    label: 'Reserved',
-    color: '#3b82f6',
-    bg: 'rgba(59, 130, 246, 0.08)',
-    border: 'rgba(59, 130, 246, 0.25)',
-    glow: 'rgba(59, 130, 246, 0.12)',
-  },
-  occupied: {
-    label: 'Occupied',
-    color: '#ef4444',
-    bg: 'rgba(239, 68, 68, 0.08)',
-    border: 'rgba(239, 68, 68, 0.25)',
-    glow: 'rgba(239, 68, 68, 0.12)',
-  },
-  cleaning: {
-    label: 'Cleaning',
-    color: '#a78bfa',
-    bg: 'rgba(167, 139, 250, 0.08)',
-    border: 'rgba(167, 139, 250, 0.25)',
-    glow: 'rgba(167, 139, 250, 0.12)',
-  },
+const statusStyles = {
+  empty: { color: '#2A7A50', bg: 'var(--success-subtle)', label: 'Available' },
+  occupied: { color: '#C07A20', bg: 'var(--warning-subtle)', label: 'Occupied' },
+  reserved: { color: '#2A5A8C', bg: 'var(--info-subtle)', label: 'Reserved' },
+  cleaning: { color: '#7A7A84', bg: 'rgba(122, 122, 132, 0.15)', label: 'Needs Cleaning' },
+}
+
+function formatOrderRef(table) {
+  if (!table.current_order_id) return 'N/A'
+  const compact = String(table.current_order_id).replace(/-/g, '').toUpperCase()
+  return `#${compact.slice(0, 8)}`
+}
+
+function formatSeatedTime(table) {
+  const value = table.seated_at || table.updated_at || table.created_at
+  if (!value || table.status === 'empty') return 'Not seated'
+  const dt = new Date(value)
+  if (Number.isNaN(dt.valueOf())) return 'Unknown'
+  return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 /* ── Settle Bill Modal ── */
@@ -143,6 +132,8 @@ function AddItemModal({ table, onClose, onItemAdded }) {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(null)
+  const [addedItems, setAddedItems] = useState({}) // itemId -> true (brief success flash)
+  const [addError, setAddError] = useState(null)
 
   useEffect(() => {
     setLoading(true)
@@ -153,11 +144,14 @@ function AddItemModal({ table, onClose, onItemAdded }) {
 
   const handleAdd = async (itemId) => {
     setAdding(itemId)
+    setAddError(null)
     try {
       await addItemToTableOrder(table.table_id, itemId, 1)
+      setAddedItems((prev) => ({ ...prev, [itemId]: true }))
+      setTimeout(() => setAddedItems((prev) => { const n = { ...prev }; delete n[itemId]; return n }), 1500)
       onItemAdded()
     } catch (err) {
-      console.error(err)
+      setAddError(err?.detail || 'Failed to add item')
     } finally {
       setAdding(null)
     }
@@ -186,6 +180,11 @@ function AddItemModal({ table, onClose, onItemAdded }) {
             style={{ marginBottom: 'var(--space-4)' }}
             autoFocus
           />
+          {addError && (
+            <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 'var(--space-3)', padding: '6px 10px', background: 'var(--danger-subtle)', borderRadius: 'var(--radius-sm)' }}>
+              {addError}
+            </div>
+          )}
           {loading ? (
             <div style={{ textAlign: 'center', padding: 'var(--space-6)', color: 'var(--text-muted)' }}>Loading...</div>
           ) : menuItems.length === 0 ? (
@@ -207,8 +206,9 @@ function AddItemModal({ table, onClose, onItemAdded }) {
                       className="tbl-add-btn"
                       onClick={() => handleAdd(item.id)}
                       disabled={adding === item.id}
+                      style={addedItems[item.id] ? { background: 'var(--success)', color: '#fff' } : undefined}
                     >
-                      {adding === item.id ? '...' : '+'}
+                      {adding === item.id ? '...' : addedItems[item.id] ? '✓' : '+'}
                     </button>
                   </div>
                 </div>
@@ -231,16 +231,21 @@ export default function Tables() {
   const [statusFilter, setStatusFilter] = useState('')
   const [sectionFilter, setSectionFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [viewMode, setViewMode] = useState('floor')
+  const [selectedTableId, setSelectedTableId] = useState(null)
   const [settleTarget, setSettleTarget] = useState(null)
   const [addItemTarget, setAddItemTarget] = useState(null)
   const [actionLoading, setActionLoading] = useState({})
   const [toast, setToast] = useState(null)
 
-  const params = useMemo(() => ({
-    status: statusFilter || undefined,
-    section: sectionFilter || undefined,
-    search: search || undefined,
-  }), [statusFilter, sectionFilter, search])
+  const params = useMemo(
+    () => ({
+      status: statusFilter || undefined,
+      section: sectionFilter || undefined,
+      search: search || undefined,
+    }),
+    [statusFilter, sectionFilter, search],
+  )
 
   const reload = useCallback(() => {
     setLoading(true)
@@ -256,7 +261,7 @@ export default function Tables() {
     setTimeout(() => setToast(null), 3000)
   }
 
-  const setTableAction = (id, loading) => setActionLoading((prev) => ({ ...prev, [id]: loading }))
+  const setTableAction = (id, isLoading) => setActionLoading((prev) => ({ ...prev, [id]: isLoading }))
 
   /* ── Actions ── */
   const handleBook = async (tableId) => {
@@ -325,7 +330,7 @@ export default function Tables() {
     return (
       <div className="app-page">
         <div style={{ padding: 'var(--space-12)' }}>
-          <div className="tbl-grid-floor">
+          <div className="tables-floor-grid">
             {[...Array(8)].map((_, i) => (
               <div key={i} className="skeleton" style={{ height: 200, borderRadius: 'var(--radius-lg)', animationDelay: `${i * 60}ms` }} />
             ))}
@@ -338,7 +343,9 @@ export default function Tables() {
   if (!data) return <div className="loading">Failed to load tables.</div>
 
   const { summary, tables } = data
-  const sections = [...new Set(tables.map((t) => t.section))]
+  const hasTables = tables.length > 0
+  const sectionOptions = Array.from(new Set(tables.map((table) => table.section).filter(Boolean)))
+  const selectedTable = tables.find((table) => table.table_id === selectedTableId) || null
 
   return (
     <motion.div
@@ -350,9 +357,9 @@ export default function Tables() {
       {/* Hero */}
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">Floor Management</div>
+          <div className="app-hero-eyebrow">Operations</div>
           <h1 className="app-hero-title">Tables</h1>
-          <p className="app-hero-sub">Real-time table status and order management.</p>
+          <p className="app-hero-sub">Visual floor plan and live table management.</p>
         </div>
         <div className="app-hero-metrics">
           <div className="app-kpi">
@@ -360,188 +367,288 @@ export default function Tables() {
             <div className="app-kpi-value">{summary.total_tables}</div>
           </div>
           <div className="app-kpi">
-            <div className="app-kpi-label" style={{ color: STATUS_CONFIG.empty.color }}>Available</div>
-            <div className="app-kpi-value" style={{ color: STATUS_CONFIG.empty.color }}>{summary.empty || 0}</div>
+            <div className="app-kpi-label" style={{ color: statusStyles.empty.color }}>Available</div>
+            <div className="app-kpi-value" style={{ color: statusStyles.empty.color }}>{summary.empty || 0}</div>
           </div>
           <div className="app-kpi">
-            <div className="app-kpi-label" style={{ color: STATUS_CONFIG.occupied.color }}>Occupied</div>
-            <div className="app-kpi-value" style={{ color: STATUS_CONFIG.occupied.color }}>{summary.occupied || 0}</div>
+            <div className="app-kpi-label" style={{ color: statusStyles.occupied.color }}>Occupied</div>
+            <div className="app-kpi-value" style={{ color: statusStyles.occupied.color }}>{summary.occupied || 0}</div>
           </div>
           <div className="app-kpi">
-            <div className="app-kpi-label" style={{ color: STATUS_CONFIG.reserved.color }}>Reserved</div>
-            <div className="app-kpi-value" style={{ color: STATUS_CONFIG.reserved.color }}>{summary.reserved || 0}</div>
+            <div className="app-kpi-label" style={{ color: statusStyles.reserved.color }}>Reserved</div>
+            <div className="app-kpi-value" style={{ color: statusStyles.reserved.color }}>{summary.reserved || 0}</div>
           </div>
         </div>
       </div>
 
-      {/* Status Legend + Filters */}
-      <div className="tbl-toolbar">
-        <div className="tbl-legend">
-          {Object.entries(STATUS_CONFIG).filter(([k]) => k !== 'cleaning').map(([key, cfg]) => (
-            <div key={key} className="tbl-legend-item">
-              <span className="tbl-legend-dot" style={{ background: cfg.color }} />
-              <span>{cfg.label}</span>
+      {/* Filters */}
+      <div className="card">
+        <div className="card-header">Floor Controls</div>
+        <div className="card-body">
+          <div className="tables-toolbar">
+            <div className="filters-row tables-filters-row">
+              <input
+                className="input"
+                placeholder="Search table number"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="">All Statuses</option>
+                <option value="empty">Available</option>
+                <option value="occupied">Occupied</option>
+                <option value="reserved">Reserved</option>
+                <option value="cleaning">Needs Cleaning</option>
+              </select>
+              <select className="input" value={sectionFilter} onChange={(e) => setSectionFilter(e.target.value)}>
+                <option value="">All Sections</option>
+                {sectionOptions.map((sectionName) => (
+                  <option key={sectionName} value={sectionName}>
+                    {sectionName}
+                  </option>
+                ))}
+              </select>
             </div>
-          ))}
-        </div>
-        <div className="tbl-filters">
-          <input
-            className="input"
-            placeholder="Search table..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ maxWidth: 180 }}
-          />
-          <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ maxWidth: 160 }}>
-            <option value="">All Statuses</option>
-            <option value="empty">Available</option>
-            <option value="occupied">Occupied</option>
-            <option value="reserved">Reserved</option>
-          </select>
-          {sections.length > 1 && (
-            <select className="input" value={sectionFilter} onChange={(e) => setSectionFilter(e.target.value)} style={{ maxWidth: 160 }}>
-              <option value="">All Sections</option>
-              {sections.map((s) => (
-                <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-              ))}
-            </select>
-          )}
+            <div className="tables-view-toggle">
+              <button
+                className={`btn ${viewMode === 'floor' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setViewMode('floor')}
+              >
+                Floor Plan
+              </button>
+              <button
+                className={`btn ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setViewMode('list')}
+              >
+                List View
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Table Grid */}
-      <div className="tbl-grid-floor">
-        <AnimatePresence mode="popLayout">
-          {tables.map((t) => {
-            const cfg = STATUS_CONFIG[t.status] || STATUS_CONFIG.empty
-            const isLoading = actionLoading[t.table_id]
-            const order = t.order
+      {!hasTables ? (
+        <div className="card">
+          <div className="card-body">
+            <div className="tables-empty-state">
+              <div className="tables-empty-icon">🪑</div>
+              <h3>No tables configured</h3>
+              <p>Add tables in setup to start managing occupancy and reservations.</p>
+            </div>
+          </div>
+        </div>
+      ) : viewMode === 'floor' ? (
+        <div className="tables-floor-grid">
+          {tables.map((table) => {
+            const style = statusStyles[table.status] || statusStyles.empty
+            const isLoading = actionLoading[table.table_id]
+            const order = table.order
 
             return (
               <motion.div
-                key={t.table_id}
-                className="tbl-card"
-                layout
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                transition={{ duration: 0.25 }}
-                style={{
-                  '--tbl-accent': cfg.color,
-                  '--tbl-bg': cfg.bg,
-                  '--tbl-border': cfg.border,
-                }}
+                key={table.table_id}
+                className={`tables-floor-card ${selectedTableId === table.table_id ? 'tables-floor-card--active' : ''}`}
+                style={{ '--table-accent': style.color, cursor: 'pointer' }}
+                onClick={() => setSelectedTableId(table.table_id)}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
               >
-                {/* Card header */}
-                <div className="tbl-card-top">
-                  <div className="tbl-card-number">
-                    <span className="tbl-status-indicator" style={{ background: cfg.color }} />
-                    Table {t.table_number}
-                  </div>
-                  <div className="tbl-status-badge" style={{ color: cfg.color, background: cfg.bg, borderColor: cfg.border }}>
-                    {cfg.label}
-                  </div>
+                <div className="tables-floor-card-head">
+                  <strong>Table {table.table_number}</strong>
+                  <span className="status-pill" style={{ color: style.color, borderColor: style.color, background: style.bg }}>
+                    {style.label}
+                  </span>
+                </div>
+                <div className="tables-floor-card-meta">
+                  <span>{table.capacity}-seater</span>
+                  <span>{table.section || 'Main Hall'}</span>
+                </div>
+                <div className="tables-floor-card-meta">
+                  <span>Order: {formatOrderRef(table)}</span>
+                  <span>Seated: {formatSeatedTime(table)}</span>
                 </div>
 
-                {/* Table meta */}
-                <div className="tbl-card-meta">
-                  <span>{t.capacity} seats</span>
-                  <span>{t.section}</span>
-                </div>
-
-                {/* Order info for occupied */}
-                {t.status === 'occupied' && order && (
-                  <div className="tbl-order-info">
-                    <div className="tbl-order-info-header">
-                      <span>Order {order.order_number || order.order_id?.slice(-8)}</span>
-                      <span className="tbl-order-total">₹{order.total_amount?.toFixed(0) || '0'}</span>
-                    </div>
-                    {order.items && order.items.length > 0 && (
-                      <div className="tbl-order-items-preview">
-                        {order.items.slice(0, 3).map((item, i) => (
-                          <div key={i} className="tbl-order-item-row">
-                            <span>{item.quantity}× {item.name}</span>
-                            <span>₹{item.line_total?.toFixed(0)}</span>
-                          </div>
-                        ))}
-                        {order.items.length > 3 && (
-                          <div className="tbl-order-more">+{order.items.length - 3} more items</div>
-                        )}
+                {/* Order items preview for occupied tables */}
+                {table.status === 'occupied' && order && order.items && order.items.length > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-subtle)', paddingTop: 'var(--space-2)', marginTop: 'var(--space-1)' }}>
+                    {order.items.slice(0, 2).map((item, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{item.quantity}× {item.name}</span>
+                        <span>₹{item.line_total?.toFixed(0)}</span>
                       </div>
+                    ))}
+                    {order.items.length > 2 && (
+                      <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>+{order.items.length - 2} more</div>
                     )}
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginTop: 2 }}>
+                      Total: ₹{order.total_amount?.toFixed(0) || '0'}
+                    </div>
                   </div>
                 )}
 
-                {/* Actions based on status */}
-                <div className="tbl-card-actions">
-                  {t.status === 'empty' && (
+                {/* Dynamic action buttons based on status */}
+                <div className="tables-floor-card-actions" onClick={(event) => event.stopPropagation()}>
+                  {table.status === 'empty' && (
                     <>
-                      <button
-                        className="tbl-action-btn tbl-action-book"
-                        onClick={() => handleBook(t.table_id)}
-                        disabled={isLoading}
-                      >
-                        {isLoading ? 'Booking...' : 'Book Table'}
+                      <button className="btn btn-primary" onClick={() => handleBook(table.table_id)} disabled={isLoading}>
+                        {isLoading ? 'Booking...' : 'Book'}
                       </button>
-                      <button
-                        className="tbl-action-btn tbl-action-reserve"
-                        onClick={() => handleReserve(t.table_id)}
-                        disabled={isLoading}
-                      >
+                      <button className="btn btn-ghost" onClick={() => handleReserve(table.table_id)} disabled={isLoading}>
                         Reserve
                       </button>
                     </>
                   )}
-
-                  {t.status === 'occupied' && (
+                  {table.status === 'occupied' && (
                     <>
-                      <button
-                        className="tbl-action-btn tbl-action-add"
-                        onClick={() => setAddItemTarget(t)}
-                        disabled={isLoading}
-                      >
-                        + Add Items
+                      <button className="btn btn-ghost" onClick={() => setAddItemTarget(table)} disabled={isLoading}>
+                        + Items
                       </button>
-                      <button
-                        className="tbl-action-btn tbl-action-settle"
-                        onClick={() => setSettleTarget(t)}
-                        disabled={isLoading}
-                      >
+                      <button className="btn btn-primary" onClick={() => setSettleTarget(table)} disabled={isLoading}>
                         Settle Bill
                       </button>
                     </>
                   )}
-
-                  {t.status === 'reserved' && (
+                  {table.status === 'reserved' && (
                     <>
-                      <button
-                        className="tbl-action-btn tbl-action-seat"
-                        onClick={() => handleSeat(t.table_id)}
-                        disabled={isLoading}
-                      >
+                      <button className="btn btn-primary" onClick={() => handleSeat(table.table_id)} disabled={isLoading}>
                         {isLoading ? 'Seating...' : 'Seat Guests'}
                       </button>
-                      <button
-                        className="tbl-action-btn tbl-action-cancel"
-                        onClick={() => handleUnreserve(t.table_id)}
-                        disabled={isLoading}
-                      >
-                        Cancel Reservation
+                      <button className="btn btn-ghost" onClick={() => handleUnreserve(table.table_id)} disabled={isLoading}>
+                        Cancel
                       </button>
                     </>
+                  )}
+                  {table.status === 'cleaning' && (
+                    <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => handleBook(table.table_id)} disabled={isLoading}>
+                      Mark Available
+                    </button>
                   )}
                 </div>
               </motion.div>
             )
           })}
-        </AnimatePresence>
-      </div>
-
-      {tables.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-12)', color: 'var(--text-muted)' }}>
-          No tables found matching your filters.
+        </div>
+      ) : (
+        <div className="card">
+          <div className="card-header">Table List</div>
+          <div className="card-body" style={{ overflowX: 'auto' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Table</th>
+                  <th>Section</th>
+                  <th>Capacity</th>
+                  <th>Status</th>
+                  <th>Current Order</th>
+                  <th>Time Seated</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tables.map((table) => {
+                  const style = statusStyles[table.status] || statusStyles.empty
+                  const isLoading = actionLoading[table.table_id]
+                  return (
+                    <tr key={table.table_id}>
+                      <td style={{ fontWeight: 700 }}>Table {table.table_number}</td>
+                      <td>{table.section || 'Main Hall'}</td>
+                      <td>{table.capacity}</td>
+                      <td>
+                        <span className="status-pill" style={{ color: style.color, borderColor: style.color, background: style.bg }}>
+                          {style.label}
+                        </span>
+                      </td>
+                      <td>{formatOrderRef(table)}</td>
+                      <td>{formatSeatedTime(table)}</td>
+                      <td>
+                        <div className="orders-row-actions">
+                          {table.status === 'empty' && (
+                            <>
+                              <button className="btn btn-ghost" onClick={() => handleBook(table.table_id)} disabled={isLoading}>Book</button>
+                              <button className="btn btn-ghost" onClick={() => handleReserve(table.table_id)} disabled={isLoading}>Reserve</button>
+                            </>
+                          )}
+                          {table.status === 'occupied' && (
+                            <>
+                              <button className="btn btn-ghost" onClick={() => setAddItemTarget(table)} disabled={isLoading}>+ Items</button>
+                              <button className="btn btn-ghost" onClick={() => setSettleTarget(table)} disabled={isLoading}>Settle</button>
+                            </>
+                          )}
+                          {table.status === 'reserved' && (
+                            <>
+                              <button className="btn btn-ghost" onClick={() => handleSeat(table.table_id)} disabled={isLoading}>Seat</button>
+                              <button className="btn btn-ghost" onClick={() => handleUnreserve(table.table_id)} disabled={isLoading}>Cancel</button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
+
+      {/* Table Drawer (incoming UI) */}
+      {selectedTable ? (
+        <div className="tables-drawer-backdrop" onClick={() => setSelectedTableId(null)}>
+          <aside className="tables-drawer" onClick={(event) => event.stopPropagation()}>
+            <div className="tables-drawer-head">
+              <div>
+                <h3>Table {selectedTable.table_number}</h3>
+                <p>{selectedTable.section || 'Main Hall'} section</p>
+              </div>
+              <button className="btn btn-ghost" onClick={() => setSelectedTableId(null)}>Close</button>
+            </div>
+            <div className="tables-drawer-meta">
+              <div><span>Capacity</span><strong>{selectedTable.capacity} seats</strong></div>
+              <div><span>Status</span><strong>{(statusStyles[selectedTable.status] || statusStyles.empty).label}</strong></div>
+              <div><span>Current Order</span><strong>{formatOrderRef(selectedTable)}</strong></div>
+            </div>
+
+            {/* Order details in drawer for occupied tables */}
+            {selectedTable.status === 'occupied' && selectedTable.order && (
+              <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 'var(--space-3)' }}>
+                <strong style={{ fontSize: 13, color: 'var(--text-primary)' }}>Order Items</strong>
+                {(selectedTable.order.items || []).map((item, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', padding: '4px 0' }}>
+                    <span>{item.quantity}× {item.name}</span>
+                    <span>₹{item.line_total?.toFixed(0)}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: 'var(--text-primary)', borderTop: '1px solid var(--border-subtle)', paddingTop: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+                  <span>Total</span>
+                  <span>₹{selectedTable.order.total_amount?.toFixed(0) || '0'}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Dynamic drawer actions based on status */}
+            <div className="tables-drawer-actions">
+              {selectedTable.status === 'empty' && (
+                <>
+                  <button className="btn btn-primary" onClick={() => { handleBook(selectedTable.table_id); setSelectedTableId(null) }}>Book Table</button>
+                  <button className="btn btn-ghost" onClick={() => { handleReserve(selectedTable.table_id); setSelectedTableId(null) }}>Reserve</button>
+                </>
+              )}
+              {selectedTable.status === 'occupied' && (
+                <>
+                  <button className="btn btn-ghost" onClick={() => { setAddItemTarget(selectedTable); setSelectedTableId(null) }}>+ Add Items</button>
+                  <button className="btn btn-primary" onClick={() => { setSettleTarget(selectedTable); setSelectedTableId(null) }}>Settle Bill</button>
+                </>
+              )}
+              {selectedTable.status === 'reserved' && (
+                <>
+                  <button className="btn btn-primary" onClick={() => { handleSeat(selectedTable.table_id); setSelectedTableId(null) }}>Seat Guests</button>
+                  <button className="btn btn-ghost" onClick={() => { handleUnreserve(selectedTable.table_id); setSelectedTableId(null) }}>Cancel Reservation</button>
+                </>
+              )}
+            </div>
+          </aside>
+        </div>
+      ) : null}
 
       {/* Settle Modal */}
       <AnimatePresence>

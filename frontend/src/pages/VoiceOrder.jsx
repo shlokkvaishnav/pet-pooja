@@ -1,11 +1,12 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
-import { submitTextOrder, transcribeAudio, confirmOrder } from '../api/client'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { submitTextOrder, transcribeAudio, confirmOrder, getMenuMatrix, getTrends } from '../api/client'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
 import KOTTicket from '../components/KOTTicket'
 import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
 import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
+import { buildUpsellCandidates } from '../utils/revenueInsights'
 
 function generateSessionId() {
   return 'sess-' + Math.random().toString(36).slice(2, 10)
@@ -21,6 +22,8 @@ export default function VoiceOrder() {
   const [confirmedOrders, setConfirmedOrders] = useState([]) // Array of confirmed order snapshots
   const [autoListenEnabled, setAutoListenEnabled] = useState(true)
   const [selectedLanguage, setSelectedLanguage] = useState('auto') // 'auto'|'en'|'hi'|'gu'|'mr'|'kn'
+  const [menuItems, setMenuItems] = useState([])
+  const [trendData, setTrendData] = useState(null)
   const sessionId = useRef(generateSessionId())
   const currentAudioRef = useRef(null)
   const recorderRef = useRef(null)
@@ -223,12 +226,35 @@ export default function VoiceOrder() {
     autoListenRef.current = autoListenEnabled
   }, [autoListenEnabled])
 
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      getMenuMatrix().catch(() => ({ items: [] })),
+      getTrends().catch(() => null),
+    ]).then(([matrix, trends]) => {
+      if (!active) return
+      setMenuItems(matrix?.items || [])
+      setTrendData(trends)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
   const confColor = (c) => c >= 0.9 ? 'var(--success)' : c >= 0.85 ? 'var(--warning)' : 'var(--danger)'
 
   // Cart items from session (accumulated across all turns)
   // Fallback to result.items if session_items not available (e.g. session_id missed)
   const cartItems = result?.session_items || result?.items || []
   const hasCart = cartItems.length > 0
+  const suggestedAddOns = useMemo(() => (
+    buildUpsellCandidates({
+      items: menuItems,
+      trends: trendData,
+      currentOrderItems: cartItems,
+      limit: 3,
+    })
+  ), [menuItems, trendData, cartItems])
 
   // Effective order for display (use session_order which covers all turns)
   const effectiveOrder = result?.session_order || result?.order
@@ -243,6 +269,20 @@ export default function VoiceOrder() {
     modify: { bg: 'color-mix(in srgb, var(--warning) 12%, transparent)', color: 'var(--warning)', icon: '↻' },
     confirm: { bg: 'color-mix(in srgb, var(--success) 12%, transparent)', color: 'var(--success)', icon: '✓' },
     info: { bg: 'color-mix(in srgb, var(--accent) 12%, transparent)', color: 'var(--accent)', icon: 'ℹ' },
+  }
+
+  const handleAddSuggestedAddon = async (addon) => {
+    if (!addon?.name) return
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await submitTextOrder(`add one ${addon.name}`, sessionId.current)
+      processResult(data)
+      setActionFeedback({ type: 'add', message: `Added add-on: ${addon.name}` })
+    } catch (err) {
+      setError(err.response?.data?.detail || err.detail || `Failed to add ${addon.name}`)
+    }
+    setLoading(false)
   }
 
   return (
@@ -698,20 +738,32 @@ export default function VoiceOrder() {
             )}
 
             {/* Upsell */}
-            {result.upsell_suggestions?.length > 0 && hasCart && (
+            {hasCart && (
               <motion.div
-                className="card" style={{ marginBottom: 16 }}
+                className="card" style={{ marginBottom: 16, marginLeft: 'auto', width: '100%', maxWidth: 440 }}
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4, duration: 0.4 }}
               >
                 <div className="card-header">Suggested Add-ons</div>
                 <div className="card-body">
-                  {result.upsell_suggestions.map((u, idx) => (
-                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
-                      <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{u.name || u.suggestion_text}</span>
-                      {u.reason && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>- {u.reason}</span>}
-                      {u.selling_price && <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 600, marginLeft: 'auto' }}>₹{u.selling_price}</span>}
+                  {suggestedAddOns.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      No high-confidence add-ons yet. Continue building the order for better recommendations.
+                    </div>
+                  ) : suggestedAddOns.map((u) => (
+                    <div key={u.item_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{u.reason}</div>
+                      </div>
+                      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 11, color: 'var(--success)', fontWeight: 700 }}>CM {u.cm_percent.toFixed(1)}%</span>
+                        <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 600 }}>Rs {u.price}</span>
+                        <button className="btn btn-ghost" style={{ fontSize: 11 }} disabled={loading} onClick={() => handleAddSuggestedAddon(u)}>
+                          Add to Order
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

@@ -1,5 +1,4 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import { gsap } from 'gsap'
 import { useNavigate } from 'react-router-dom'
 import { ArrowRight } from '@phosphor-icons/react'
 import './MagicBento.css'
@@ -8,6 +7,60 @@ const DEFAULT_PARTICLE_COUNT = 12
 const DEFAULT_SPOTLIGHT_RADIUS = 300
 const DEFAULT_GLOW_COLOR = '200, 69, 10' // Sizzle accent
 const MOBILE_BREAKPOINT = 768
+
+/* ─── Lightweight GSAP-compatible shim (avoids hard dependency) ─── */
+const _applyVars = (el, vars = {}) => {
+    if (!el) return
+
+    const toPx = (v) => (typeof v === 'number' ? `${v}px` : v)
+
+    if (vars.opacity != null) el.style.opacity = String(vars.opacity)
+    if (vars.left != null) el.style.left = toPx(vars.left)
+    if (vars.top != null) el.style.top = toPx(vars.top)
+    if (vars.transformPerspective != null) el.style.perspective = `${vars.transformPerspective}px`
+
+    const transforms = []
+    if (vars.x != null || vars.y != null) transforms.push(`translate(${vars.x || 0}px, ${vars.y || 0}px)`)
+    if (vars.rotateX != null) transforms.push(`rotateX(${vars.rotateX}deg)`)
+    if (vars.rotateY != null) transforms.push(`rotateY(${vars.rotateY}deg)`)
+    if (vars.rotation != null) transforms.push(`rotate(${vars.rotation}deg)`)
+    if (vars.scale != null) transforms.push(`scale(${vars.scale})`)
+    if (transforms.length) el.style.transform = transforms.join(' ')
+}
+
+const _animate = (el, vars = {}) => {
+    if (!el) return { kill: () => {} }
+    const durationMs = Math.max(0, Number(vars.duration || 0) * 1000)
+    const onComplete = typeof vars.onComplete === 'function' ? vars.onComplete : null
+
+    const apply = () => _applyVars(el, vars)
+    if (durationMs > 0) {
+        el.style.transition = `all ${durationMs}ms ease-out`
+        requestAnimationFrame(apply)
+    } else {
+        apply()
+    }
+
+    const timer = setTimeout(() => {
+        el.style.transition = ''
+        if (onComplete) onComplete()
+    }, durationMs)
+
+    return {
+        kill: () => {
+            clearTimeout(timer)
+            if (el) el.style.transition = ''
+        },
+    }
+}
+
+const gsap = {
+    to: (el, vars) => _animate(el, vars),
+    fromTo: (el, fromVars, toVars) => {
+        _applyVars(el, fromVars)
+        return _animate(el, toVars)
+    },
+}
 
 /* ─── Helpers ─── */
 

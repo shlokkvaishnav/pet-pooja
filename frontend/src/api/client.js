@@ -1,26 +1,144 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000/api', // Pointing to localhost:8000 as per spec
+  baseURL: 'http://localhost:8000/api',
   timeout: 30000,
 })
 
-// Add a response interceptor for uniform error handling
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    console.error('API Error:', error.response?.data || error.message);
-    // Return a uniform error shape or throw
-    return Promise.reject(error.response?.data || { detail: 'An unknown API error occurred.' })
-  }
-)
+const inflightGets = new Map()
+const responseCache = new Map()
 
-// ── Helper: get current restaurant_id from localStorage ──
+const SHORT_CACHE_TTL_MS = 20000
+const DEFAULT_CACHE_TTL_MS = 45000
+const LONG_CACHE_TTL_MS = 120000
+const MAX_CACHE_ENTRIES = 200
+const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
+
+function normalizeError(error) {
+  const status = error?.response?.status
+  const data = error?.response?.data
+  const detail = data?.detail || data?.error || error?.message || 'An unknown API error occurred.'
+  return { status, detail, raw: data || null }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function toSortedParams(params = {}) {
+  const entries = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .sort(([a], [b]) => a.localeCompare(b))
+  return Object.fromEntries(entries)
+}
+
+function makeGetKey(path, params = {}) {
+  return `${path}?${JSON.stringify(toSortedParams(params))}`
+}
+
+function readCache(key) {
+  const entry = responseCache.get(key)
+  if (!entry) return null
+  if (Date.now() - entry.ts > entry.ttlMs) {
+    responseCache.delete(key)
+    return null
+  }
+  return entry.data
+}
+
+function writeCache(key, data, ttlMs = DEFAULT_CACHE_TTL_MS) {
+  if (responseCache.size >= MAX_CACHE_ENTRIES && !responseCache.has(key)) {
+    const oldestKey = responseCache.keys().next().value
+    if (oldestKey) responseCache.delete(oldestKey)
+  }
+  responseCache.set(key, { data, ts: Date.now(), ttlMs })
+}
+
+function invalidateCacheByPrefix(prefix) {
+  for (const key of responseCache.keys()) {
+    if (key.startsWith(prefix)) responseCache.delete(key)
+  }
+}
+
+async function requestWithRetry(fn, retries = 1) {
+  let attempt = 0
+  while (true) {
+    try {
+      return await fn()
+    } catch (error) {
+      const status = error?.response?.status
+      const transient = !status || TRANSIENT_STATUS.has(status)
+      if (!transient || attempt >= retries) throw error
+      await sleep(200 * (2 ** attempt))
+      attempt += 1
+    }
+  }
+}
+
+async function getWithCache(path, {
+  params = {},
+  ttlMs = DEFAULT_CACHE_TTL_MS,
+  dedupe = true,
+  retries = 1,
+  bypassCache = false,
+} = {}) {
+  const sortedParams = toSortedParams(params)
+  const key = makeGetKey(path, sortedParams)
+
+  if (!bypassCache) {
+    const cached = readCache(key)
+    if (cached !== null) return cached
+  }
+
+  if (dedupe && inflightGets.has(key)) {
+    return inflightGets.get(key)
+  }
+
+  const reqPromise = requestWithRetry(
+    () => api.get(path, { params: sortedParams }).then((r) => r.data),
+    retries,
+  )
+    .then((data) => {
+      writeCache(key, data, ttlMs)
+      return data
+    })
+    .catch((error) => {
+      console.error('API Error:', error?.response?.data || error.message)
+      throw normalizeError(error)
+    })
+    .finally(() => {
+      inflightGets.delete(key)
+    })
+
+  if (dedupe) inflightGets.set(key, reqPromise)
+  return reqPromise
+}
+
+async function post(path, body) {
+  try {
+    return await api.post(path, body).then((r) => r.data)
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
+
+async function patch(path, body) {
+  try {
+    return await api.patch(path, body).then((r) => r.data)
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
+
 function _rid() {
   try {
     const r = JSON.parse(localStorage.getItem('sizzle_restaurant') || '{}')
     return r.restaurant_id || null
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 function _params(extra = {}) {
@@ -28,69 +146,66 @@ function _params(extra = {}) {
   return rid ? { restaurant_id: rid, ...extra } : extra
 }
 
-// ── Auth ──
-
 export const loginApi = (email, password) =>
-  api.post('/auth/login', { email, password }).then(r => r.data)
+  post('/auth/login', { email, password })
 
 export const getRestaurantProfile = (restaurantId) =>
-  api.get(`/auth/me/${restaurantId}`).then(r => r.data)
+  getWithCache(`/auth/me/${restaurantId}`, { ttlMs: LONG_CACHE_TTL_MS })
 
-// ── Revenue Intelligence ──
+export const updateRestaurantProfile = (restaurantId, payload) =>
+  patch(`/auth/me/${restaurantId}`, payload)
 
 export const getDashboardMetrics = () =>
-  api.get('/revenue/dashboard', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/dashboard', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getMenuMatrix = () =>
-  api.get('/revenue/menu-matrix', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/menu-matrix', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getHiddenStars = () =>
-  api.get('/revenue/hidden-stars', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/hidden-stars', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getRisks = () =>
-  api.get('/revenue/risks', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/risks', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getCombos = (forceRetrain = false, discountPct = 10) =>
-  api.get('/revenue/combos', { params: _params({ force_retrain: forceRetrain, discount_pct: discountPct }) }).then(r => r.data)
+  getWithCache('/revenue/combos', {
+    params: _params({ force_retrain: forceRetrain, discount_pct: discountPct }),
+    ttlMs: SHORT_CACHE_TTL_MS,
+    bypassCache: !!forceRetrain,
+  })
 
 export const getPriceRecommendations = () =>
-  api.get('/revenue/price-recommendations', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/price-recommendations', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getCategoryBreakdown = () =>
-  api.get('/revenue/category-breakdown', { params: _params() }).then(r => r.data)
-
-// ── Trends & Time-Series ──
+  getWithCache('/revenue/category-breakdown', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getTrends = () =>
-  api.get('/revenue/trends', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/trends', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getWowMom = () =>
-  api.get('/revenue/trends/wow-mom', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/trends/wow-mom', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getPriceElasticity = () =>
-  api.get('/revenue/trends/price-elasticity', { params: _params() }).then(r => r.data)
-
-// ── Advanced Analytics ──
+  getWithCache('/revenue/trends/price-elasticity', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getCannibalization = (days = 90) =>
-  api.get('/revenue/analytics/cannibalization', { params: _params({ days }) }).then(r => r.data)
+  getWithCache('/revenue/analytics/cannibalization', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getPriceSensitivity = () =>
-  api.get('/revenue/analytics/price-sensitivity', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/analytics/price-sensitivity', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getWasteAnalysis = (days = 30) =>
-  api.get('/revenue/analytics/waste', { params: _params({ days }) }).then(r => r.data)
+  getWithCache('/revenue/analytics/waste', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getCustomerReturns = (days = 30) =>
-  api.get('/revenue/analytics/customer-returns', { params: _params({ days }) }).then(r => r.data)
+  getWithCache('/revenue/analytics/customer-returns', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getMenuComplexity = () =>
-  api.get('/revenue/analytics/menu-complexity', { params: _params() }).then(r => r.data)
+  getWithCache('/revenue/analytics/menu-complexity', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOperationalMetrics = (days = 30) =>
-  api.get('/revenue/analytics/operational', { params: _params({ days }) }).then(r => r.data)
-
-// ── Voice Ordering ──
+  getWithCache('/revenue/analytics/operational', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
 
 export const transcribeAudio = (audioBlob, sessionId, language = null) => {
   const form = new FormData()
@@ -107,77 +222,173 @@ export const transcribeAudio = (audioBlob, sessionId, language = null) => {
 }
 
 export const submitTextOrder = (text, sessionId) =>
-  api.post('/voice/process', { text, session_id: sessionId || null })
-    .then(r => r.data)
+  post('/voice/process', { text, session_id: sessionId || null })
 
 export const confirmOrder = (order, kot) =>
-  api.post('/voice/confirm-order', { order, kot }).then(r => r.data)
+  post('/voice/confirm-order', { order, kot })
 
 export const speakText = (text, language = 'en') =>
-  api.post('/voice/speak', { text, language }).then(r => r.data)
-
-// ── Health ──
+  post('/voice/speak', { text, language })
 
 export const getVoiceOrders = () =>
-  api.get('/voice/orders').then(r => r.data)
-
-// —— Operations ——
+  getWithCache('/voice/orders', { ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsOrders = (params = {}) =>
-  api.get('/ops/orders', { params }).then(r => r.data)
+  getWithCache('/ops/orders', { params, ttlMs: SHORT_CACHE_TTL_MS })
+
+export const getOpsOrder = (orderId) =>
+  getWithCache(`/ops/orders/${orderId}`, { ttlMs: SHORT_CACHE_TTL_MS })
+
+export const createOpsOrder = (payload) =>
+  post('/ops/orders', payload).then((data) => {
+    invalidateCacheByPrefix('/ops/orders?')
+    return data
+  })
+
+export const updateOpsOrder = (orderId, payload) =>
+  patch(`/ops/orders/${orderId}`, payload).then((data) => {
+    invalidateCacheByPrefix('/ops/orders?')
+    invalidateCacheByPrefix('/ops/tables?')
+    return data
+  })
+
+export const cancelOpsOrder = (orderId) =>
+  post(`/ops/orders/${orderId}/cancel`, {}).then((data) => {
+    invalidateCacheByPrefix('/ops/orders?')
+    invalidateCacheByPrefix('/ops/tables?')
+    return data
+  })
 
 export const getOpsTables = () =>
-  api.get('/ops/tables').then(r => r.data)
+  getWithCache('/ops/tables', { ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsTablesFiltered = (params = {}) =>
-  api.get('/ops/tables', { params }).then(r => r.data)
+  getWithCache('/ops/tables', { params, ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsInventory = (days = 30) =>
-  api.get('/ops/inventory', { params: { days } }).then(r => r.data)
+  getWithCache('/ops/inventory', { params: { days }, ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsInventoryFiltered = (params = {}) =>
-  api.get('/ops/inventory', { params }).then(r => r.data)
+  getWithCache('/ops/inventory', { params, ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsReports = (days = 14) =>
-  api.get('/ops/reports', { params: { days } }).then(r => r.data)
+  getWithCache('/ops/reports', { params: { days }, ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsReportsFiltered = (params = {}) =>
-  api.get('/ops/reports', { params }).then(r => r.data)
+  getWithCache('/ops/reports', { params, ttlMs: SHORT_CACHE_TTL_MS })
 
 export const getOpsSettings = () =>
-  api.get('/ops/settings').then(r => r.data)
+  getWithCache('/ops/settings', { params: _params(), ttlMs: LONG_CACHE_TTL_MS })
+
+export const updateOpsSettings = (payload) =>
+  patch('/ops/settings', _params(payload)).then((data) => {
+    invalidateCacheByPrefix('/ops/settings?')
+    return data
+  })
+
+export const createSettingsStaff = (payload) =>
+  post('/ops/settings/staff', _params(payload)).then((data) => {
+    invalidateCacheByPrefix('/ops/settings?')
+    return data
+  })
+
+export const updateSettingsStaff = (staffId, payload) =>
+  patch(`/ops/settings/staff/${staffId}`, payload).then((data) => {
+    invalidateCacheByPrefix('/ops/settings?')
+    return data
+  })
 
 export const updateTableStatus = (tableId, payload) =>
-  api.patch(`/ops/tables/${tableId}`, payload).then(r => r.data)
+  patch(`/ops/tables/${tableId}`, payload).then((data) => {
+    invalidateCacheByPrefix('/ops/tables?')
+    return data
+  })
 
-export const bookTable = (tableId, payload = {}) =>
-  api.post(`/ops/tables/${tableId}/book`, payload, { params: _params() }).then(r => r.data)
+export const previewTableMerge = (tableIds) =>
+  post('/ops/tables/merge-preview', { table_ids: tableIds })
 
-export const settleTable = (tableId, payload = {}) =>
-  api.post(`/ops/tables/${tableId}/settle`, payload).then(r => r.data)
+export const bookTable = async (tableId, payload = {}) => {
+  try {
+    const data = await api.post(`/ops/tables/${tableId}/book`, payload, { params: _params() }).then(r => r.data)
+    invalidateCacheByPrefix('/ops/tables')
+    return data
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
 
-export const reserveTable = (tableId) =>
-  api.post(`/ops/tables/${tableId}/reserve`).then(r => r.data)
+export const settleTable = async (tableId, payload = {}) => {
+  try {
+    const data = await api.post(`/ops/tables/${tableId}/settle`, payload).then(r => r.data)
+    invalidateCacheByPrefix('/ops/tables')
+    return data
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
 
-export const unreserveTable = (tableId) =>
-  api.post(`/ops/tables/${tableId}/unreserve`).then(r => r.data)
+export const reserveTable = async (tableId) => {
+  try {
+    const data = await api.post(`/ops/tables/${tableId}/reserve`).then(r => r.data)
+    invalidateCacheByPrefix('/ops/tables')
+    return data
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
 
-export const seatReservedTable = (tableId) =>
-  api.post(`/ops/tables/${tableId}/seat`).then(r => r.data)
+export const unreserveTable = async (tableId) => {
+  try {
+    const data = await api.post(`/ops/tables/${tableId}/unreserve`).then(r => r.data)
+    invalidateCacheByPrefix('/ops/tables')
+    return data
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
+
+export const seatReservedTable = async (tableId) => {
+  try {
+    const data = await api.post(`/ops/tables/${tableId}/seat`).then(r => r.data)
+    invalidateCacheByPrefix('/ops/tables')
+    return data
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
 
 export const getMenuItemsList = (search = '') =>
   api.get('/ops/menu-items', { params: _params({ search: search || undefined }) }).then(r => r.data)
 
-export const addItemToTableOrder = (tableId, itemId, quantity = 1) =>
-  api.post(`/ops/tables/${tableId}/add-item`, null, { params: { item_id: itemId, quantity } }).then(r => r.data)
+export const addItemToTableOrder = async (tableId, itemId, quantity = 1) => {
+  try {
+    const data = await api.post(`/ops/tables/${tableId}/add-item`, null, { params: { item_id: itemId, quantity } }).then(r => r.data)
+    invalidateCacheByPrefix('/ops/tables')
+    return data
+  } catch (error) {
+    console.error('API Error:', error?.response?.data || error.message)
+    throw normalizeError(error)
+  }
+}
 
 export const adjustInventory = (payload) =>
-  api.post('/ops/inventory/adjust', payload).then(r => r.data)
+  post('/ops/inventory/adjust', payload).then((data) => {
+    invalidateCacheByPrefix('/ops/inventory?')
+    return data
+  })
 
 export const updateIngredient = (ingredientId, payload) =>
-  api.patch(`/ops/inventory/${ingredientId}`, payload).then(r => r.data)
+  patch(`/ops/inventory/${ingredientId}`, payload).then((data) => {
+    invalidateCacheByPrefix('/ops/inventory?')
+    return data
+  })
 
 export const exportReportsCsv = (params = {}) =>
-  api.get('/ops/reports/export', { params, responseType: 'blob' }).then(r => r.data)
+  api.get('/ops/reports/export', { params, responseType: 'blob' }).then((r) => r.data)
 
 export default api

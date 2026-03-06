@@ -55,6 +55,26 @@ class Restaurant(Base):
     staff_members = relationship("Staff", back_populates="restaurant")
     orders = relationship("Order", back_populates="restaurant")
     shifts = relationship("Shift", back_populates="restaurant")
+    settings = relationship("RestaurantSettings", back_populates="restaurant", uselist=False)
+
+
+class RestaurantSettings(Base):
+    """Per-restaurant user-facing settings and preferences."""
+
+    __tablename__ = "restaurant_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False, unique=True)
+    menu_management = Column(JSON, default=dict)
+    notifications = Column(JSON, default=dict)
+    integrations = Column(JSON, default=dict)
+    billing_plan = Column(JSON, default=dict)
+    security = Column(JSON, default=dict)
+    voice_ai_config = Column(JSON, default=dict)
+    profile_extras = Column(JSON, default=dict)  # operating_hours, gst_number, etc.
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    restaurant = relationship("Restaurant", back_populates="settings")
 
 
 # ── Staff ────────────────────────────────────────

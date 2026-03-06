@@ -1,194 +1,207 @@
-import { useState, useEffect } from 'react'
-import { getCombos, getPriceRecommendations } from '../api/client'
-import ComboCard from '../components/ComboCard'
+import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'motion/react'
-import { StaggerReveal, ScrollReveal, staggerContainer, staggerItem, fadeInUp } from '../utils/animations'
+import { getCombos, getDashboardMetrics, getMenuMatrix } from '../api/client'
+import { formatPct, formatRupees } from '../utils/format'
+import { buildComboInsights } from '../utils/revenueInsights'
+
+function ComboSkeleton() {
+  return (
+    <div className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
+      {Array.from({ length: 4 }).map((_, idx) => (
+        <div key={idx} className="card">
+          <div className="card-body">
+            <div className="skeleton" style={{ height: 18, marginBottom: 10 }} />
+            <div className="skeleton" style={{ height: 12, marginBottom: 8 }} />
+            <div className="skeleton" style={{ height: 12, marginBottom: 8 }} />
+            <div className="skeleton" style={{ height: 36 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function ComboEngine() {
-  const [combos, setCombos] = useState([])
-  const [prices, setPrices] = useState([])
   const [loading, setLoading] = useState(true)
-  const [pricesLoading, setPricesLoading] = useState(true)
-  const [retraining, setRetraining] = useState(false)
-  const [discountPct, setDiscountPct] = useState(10)
+  const [combosRaw, setCombosRaw] = useState([])
+  const [menuItems, setMenuItems] = useState([])
+  const [totalOrders, setTotalOrders] = useState(0)
+  const [promotedIds, setPromotedIds] = useState([])
+  const [error, setError] = useState(null)
 
-  const loadData = (forceRetrain = false) => {
-    const setLoadingFn = forceRetrain ? setRetraining : setLoading
-    setLoadingFn(true)
-    if (!forceRetrain) setPricesLoading(true)
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError(null)
 
-    getCombos(forceRetrain, discountPct)
-      .catch(() => ({ combos: [] }))
-      .then((comboData) => {
-        setCombos(comboData.combos || comboData || [])
+    Promise.all([
+      getCombos(),
+      getMenuMatrix(),
+      getDashboardMetrics(),
+    ])
+      .then(([comboData, matrixData, dashboard]) => {
+        if (!active) return
+        setCombosRaw(comboData?.combos || comboData || [])
+        setMenuItems(matrixData?.items || [])
+        setTotalOrders(dashboard?.total_orders || 0)
       })
-      .catch(err => console.error('Combos/Pricing failed:', err))
-      .finally(() => setLoadingFn(false))
+      .catch((err) => {
+        if (!active) return
+        setError(err?.detail || 'Failed to load combo insights')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
 
-    if (!forceRetrain) {
-      getPriceRecommendations()
-        .catch(() => [])
-        .then((priceData) => {
-          const list = Array.isArray(priceData)
-            ? priceData
-            : (priceData?.recommendations || [])
-          setPrices(list)
-        })
-        .finally(() => setPricesLoading(false))
+    return () => {
+      active = false
     }
-  }
+  }, [])
 
-  useEffect(() => { loadData() }, [])
+  const insights = useMemo(() => buildComboInsights({
+    combos: combosRaw,
+    menuItems,
+    totalOrders,
+    promotedIds,
+  }), [combosRaw, menuItems, totalOrders, promotedIds])
+
+  const promoteCombo = (id) => {
+    setPromotedIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+  }
 
   if (loading) {
-    return <div className="loading"><div className="spinner" /> Mining combos and crunching prices...</div>
+    return (
+      <div className="app-page">
+        <div className="skeleton" style={{ height: 84, marginBottom: 'var(--space-5)' }} />
+        <div className="skeleton" style={{ height: 70, marginBottom: 'var(--space-5)' }} />
+        <ComboSkeleton />
+        <div className="skeleton" style={{ height: 220 }} />
+      </div>
+    )
   }
 
-  const avgLift = combos.length > 0 ? (combos.reduce((s, c) => s + (parseFloat(c.lift) || 0), 0) / combos.length).toFixed(1) : 'N/A'
-  const avgConf = combos.length > 0 ? (combos.reduce((s, c) => s + (c.confidence || 0), 0) / combos.length * 100).toFixed(0) : 'N/A'
+  if (error) {
+    return <div className="loading">{error}</div>
+  }
+
+  const summary = insights.summary
+  const hasCombos = insights.combos.length > 0
 
   return (
     <motion.div
       className="app-page"
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
+      transition={{ duration: 0.3 }}
     >
-      <motion.div
-        className="app-hero"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-      >
+      <div className="app-hero">
         <div>
           <div className="app-hero-eyebrow">Intelligence</div>
-          <h1 className="app-hero-title">Combo Intelligence</h1>
-          <p className="app-hero-sub">AI-generated combo recommendations and price strategies.</p>
-        </div>
-      </motion.div>
-
-      {/* Summary bar */}
-      <div style={{
-        display: 'flex', gap: 'var(--space-6)', alignItems: 'center',
-        padding: 'var(--space-3) var(--space-5)',
-        background: 'var(--bg-surface)', borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--border-subtle)', marginBottom: 'var(--space-6)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>{combos.length}</span>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Combos</span>
-        </div>
-        <div style={{ width: 1, height: 24, background: 'var(--border-subtle)' }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700, color: 'var(--accent)' }}>{avgLift}×</span>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Avg Lift</span>
-        </div>
-        <div style={{ width: 1, height: 24, background: 'var(--border-subtle)' }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700, color: 'var(--success)' }}>{avgConf}%</span>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Avg Confidence</span>
-        </div>
-
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            Discount
-            <input
-              type="number"
-              min="1"
-              max="30"
-              value={discountPct}
-              onChange={e => setDiscountPct(Number(e.target.value))}
-              style={{ width: 48 }}
-            />
-            <span>%</span>
-          </label>
-          <button
-            className="btn btn-secondary"
-            onClick={() => loadData(true)}
-            disabled={retraining}
-            style={{ padding: '6px 14px', fontSize: 12 }}
-          >
-            {retraining ? 'Retraining…' : 'Retrain Model'}
-          </button>
+          <h1 className="app-hero-title">Combo Engine</h1>
+          <p className="app-hero-sub">AI-generated bundles to increase average order value and margin contribution.</p>
         </div>
       </div>
 
-      {/* Combos */}
-      {combos.length === 0 ? (
-        <div className="card" style={{ marginBottom: 32 }}>
-          <div className="card-body" style={{ textAlign: 'center', padding: 40 }}>
-            <p style={{ color: 'var(--text-muted)' }}>No combos generated yet.</p>
+      {insights.usedSynthetic && (
+        <div className="card" style={{ marginBottom: 'var(--space-4)', borderColor: 'var(--warning)' }}>
+          <div className="card-body" style={{ fontSize: 13 }}>
+            Limited order history detected (under 30 records). Showing realistic demo combos from a display-only synthetic model.
           </div>
         </div>
-      ) : (
-        <StaggerReveal className="grid-2" style={{ marginBottom: 32 }} variants={staggerContainer}>
-          {combos.map((combo, idx) => (
-            <motion.div key={idx} variants={staggerItem}>
-              <ComboCard combo={combo} />
-            </motion.div>
-          ))}
-        </StaggerReveal>
       )}
 
-      {/* Price Recommendations */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 'var(--space-4)' }}>
-        <h2 style={{ fontSize: 18, fontFamily: 'var(--font-display)', margin: 0 }}>Price Recommendations</h2>
-        {prices.length > 0 && (
-          <span style={{
-            fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius-full)',
-            background: 'var(--bg-overlay)', color: 'var(--text-secondary)',
-          }}>{prices.length} items</span>
-        )}
-      </div>
+      <section
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gap: 'var(--space-3)',
+          marginBottom: 'var(--space-5)',
+        }}
+      >
+        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Total Combos Identified</div><div style={{ fontSize: 28, fontWeight: 800 }}>{summary.totalCombos}</div></div></div>
+        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Average AOV Uplift</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent)' }}>{formatPct(summary.avgAovUpliftPct)}</div></div></div>
+        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Active / Promoted</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--success)' }}>{summary.activePromoted}</div></div></div>
+      </section>
 
-      <ScrollReveal variants={fadeInUp}>
-        <div className="card">
-          <div className="card-body" style={{ padding: 0 }}>
-            {pricesLoading ? (
-              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-                Loading price recommendations...
+      <section style={{ marginBottom: 'var(--space-6)' }}>
+        <h2 style={{ marginBottom: 'var(--space-3)' }}>Recommended Combos</h2>
+        {!hasCombos ? (
+          <div className="card">
+            <div className="card-body">
+              Unable to compute combos right now. Refresh after new order data is available.
+            </div>
+          </div>
+        ) : (
+          <div className="grid-2">
+            {insights.combos.map((combo) => (
+              <div key={combo.id} className="card">
+                <div className="card-body">
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>{combo.itemNames.join(' + ')}</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 10 }}>
+                    {combo.itemNames.map((name, idx) => `${name} (${formatRupees(combo.itemPrices[idx] || 0)})`).join('  |  ')}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+                    <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Combined Price</div><div style={{ fontWeight: 700 }}>{formatRupees(combo.combinedPrice)}</div></div>
+                    <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Bundle Price</div><div style={{ fontWeight: 700, color: 'var(--success)' }}>{formatRupees(combo.bundlePrice)}</div></div>
+                    <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Discount</div><div style={{ fontWeight: 700 }}>{formatPct(combo.discountPct)}</div></div>
+                    <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Est. AOV Uplift</div><div style={{ fontWeight: 700, color: 'var(--accent)' }}>+{formatPct(combo.aovUpliftPct)}</div></div>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+                    Confidence: <strong>{formatPct(combo.confidence * 100)}</strong> based on order co-occurrence frequency.
+                  </div>
+                  <button
+                    className={combo.isPromoted ? 'btn btn-secondary' : 'btn btn-primary'}
+                    onClick={() => promoteCombo(combo.id)}
+                    disabled={combo.isPromoted}
+                    style={{ width: '100%' }}
+                  >
+                    {combo.isPromoted ? 'Promoted' : 'Promote This Combo'}
+                  </button>
+                </div>
               </div>
-            ) : prices.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-                No price recommendations at this time.
-              </div>
-            ) : (
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2 style={{ marginBottom: 'var(--space-3)' }}>Promoted Combo Performance</h2>
+        {insights.promotedPerformance.length === 0 ? (
+          <div className="card">
+            <div className="card-body">
+              Promote at least one combo to start tracking performance metrics.
+            </div>
+          </div>
+        ) : (
+          <div className="card">
+            <div className="card-body" style={{ padding: 0 }}>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Item</th>
-                    <th style={{ textAlign: 'right' }}>Current</th>
-                    <th style={{ textAlign: 'right' }}>Suggested</th>
-                    <th>Strategy</th>
-                    <th>Reasoning</th>
+                    <th>Combo Name</th>
+                    <th style={{ textAlign: 'right' }}>Times Suggested</th>
+                    <th style={{ textAlign: 'right' }}>Times Accepted</th>
+                    <th style={{ textAlign: 'right' }}>Acceptance Rate</th>
+                    <th style={{ textAlign: 'right' }}>Revenue Attributed</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(Array.isArray(prices) ? prices : []).map((p, idx) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 600 }}>{p.name}</td>
-                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>₹{p.current_price}</td>
-                      <td style={{
-                        textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600,
-                        color: p.suggested_price > p.current_price ? 'var(--success)' : 'var(--text-primary)'
-                      }}>
-                        ₹{p.suggested_price}
-                        {p.suggested_price > p.current_price && <span style={{ fontSize: 11, marginLeft: 4 }}>↑</span>}
-                      </td>
-                      <td>
-                        <span className={`tag tag-${p.priority === 'high' ? 'red' : p.priority === 'medium' ? 'amber' : 'blue'}`}>
-                          {p.quadrant?.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.reasoning}</td>
+                  {insights.promotedPerformance.map((row) => (
+                    <tr key={row.id}>
+                      <td style={{ fontWeight: 600 }}>{row.comboName}</td>
+                      <td className="col-number">{row.timesSuggested}</td>
+                      <td className="col-number">{row.timesAccepted}</td>
+                      <td className="col-number">{formatPct(row.acceptanceRate)}</td>
+                      <td className="col-number">{formatRupees(row.revenueAttributed)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
+            </div>
           </div>
-        </div>
-      </ScrollReveal>
+        )}
+      </section>
     </motion.div>
   )
 }
+

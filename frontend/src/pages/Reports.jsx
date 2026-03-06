@@ -1,9 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { exportReportsCsv, getOpsReportsFiltered } from '../api/client'
 import { formatRupees } from '../utils/format'
 import { motion } from 'motion/react'
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar,
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  BarChart,
+  Bar,
+  Line,
 } from 'recharts'
 
 const TOOLTIP_STYLE = {
@@ -14,24 +23,71 @@ const TOOLTIP_STYLE = {
   fontFamily: 'var(--font-body)',
 }
 
+function formatShortDate(value) {
+  if (!value) return ''
+  const dt = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(dt.valueOf())) return value
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function todayIso() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 export default function Reports() {
   const [data, setData] = useState([])
   const [topItems, setTopItems] = useState([])
   const [topCategories, setTopCategories] = useState([])
+  const [hourlyHeatmap, setHourlyHeatmap] = useState([])
+  const [hourlyHeatmapMax, setHourlyHeatmapMax] = useState(0)
+  const [comboPerformance, setComboPerformance] = useState([])
+  const [voiceAccuracy, setVoiceAccuracy] = useState(null)
+  const [repeatRate, setRepeatRate] = useState(null)
   const [days, setDays] = useState(14)
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [appliedRange, setAppliedRange] = useState({ startDate: '', endDate: '' })
   const [exportKind, setExportKind] = useState('daily')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    getOpsReportsFiltered({ days, top_n: 8 })
+    getOpsReportsFiltered({
+      days,
+      top_n: 8,
+      start_date: appliedRange.startDate || undefined,
+      end_date: appliedRange.endDate || undefined,
+    })
       .then((res) => {
         setData(res.daily || [])
         setTopItems(res.top_items || [])
         setTopCategories(res.top_categories || [])
+        setHourlyHeatmap(res.hourly_order_heatmap || [])
+        setHourlyHeatmapMax(res.hourly_order_heatmap_max || 0)
+        setComboPerformance(res.combo_performance || [])
+        setVoiceAccuracy(res.voice_accuracy || null)
+        setRepeatRate(res.customer_repeat_rate || null)
       })
       .finally(() => setLoading(false))
-  }, [days])
+  }, [days, appliedRange.startDate, appliedRange.endDate])
+
+  const chartData = useMemo(
+    () => data.map((row) => ({
+      ...row,
+      date_label: formatShortDate(row.date),
+      revenue_solid: row.is_today ? null : row.revenue,
+      revenue_live: row.is_today ? row.revenue : null,
+    })),
+    [data],
+  )
+
+  const totalRevenue = data.reduce((sum, d) => sum + (d.revenue || 0), 0)
+  const voiceAccuracyPct = voiceAccuracy?.accuracy_pct || 0
+  const voiceTotal = voiceAccuracy?.voice_total || 0
 
   if (loading) return <div className="loading">Loading reports...</div>
 
@@ -50,30 +106,30 @@ export default function Reports() {
           </div>
           <div className="app-kpi">
             <div className="app-kpi-label">Total Revenue</div>
-            <div className="app-kpi-value">
-              {formatRupees(data.reduce((sum, d) => sum + (d.revenue || 0), 0))}
-            </div>
+            <div className="app-kpi-value">{formatRupees(totalRevenue)}</div>
           </div>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-header">Controls</div>
         <div className="card-body">
-          <div className="filters-row">
+          <div className="filters-row reports-filters-row">
             <select className="input" value={days} onChange={(e) => setDays(Number(e.target.value))}>
               <option value={7}>Last 7 days</option>
               <option value={14}>Last 14 days</option>
               <option value={30}>Last 30 days</option>
               <option value={60}>Last 60 days</option>
             </select>
+            <input className="input" type="date" value={startDate} max={endDate || undefined} onChange={(e) => setStartDate(e.target.value)} />
+            <input className="input" type="date" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} />
+            <button className="btn btn-ghost" onClick={() => setAppliedRange({ startDate, endDate })}>Apply Range</button>
             <select className="input" value={exportKind} onChange={(e) => setExportKind(e.target.value)}>
               <option value="daily">Export Daily</option>
               <option value="top_items">Export Top Items</option>
               <option value="top_categories">Export Top Categories</option>
             </select>
             <button
-              className="btn btn-primary"
+              className="btn btn-ghost"
               onClick={() => {
                 exportReportsCsv({ kind: exportKind, days })
                   .then((blob) => {
@@ -94,13 +150,16 @@ export default function Reports() {
 
       <div className="app-grid-2">
         <motion.div className="card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-          <div className="card-header">Daily Revenue</div>
+          <div className="card-header">
+            Daily Revenue
+            <span className="reports-live-chip">Today (live)<span className="reports-live-dot" /></span>
+          </div>
           <div className="card-body">
-            {data.length === 0 ? (
+            {chartData.length === 0 ? (
               <div className="muted">No report data available.</div>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
-                <AreaChart data={data}>
+                <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="revFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.6} />
@@ -108,10 +167,11 @@ export default function Reports() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                  <XAxis dataKey="date" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+                  <XAxis dataKey="date_label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => formatRupees(v)} />
-                  <Area type="monotone" dataKey="revenue" stroke="var(--accent)" fill="url(#revFill)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="revenue_solid" stroke="var(--accent)" fill="url(#revFill)" strokeWidth={2} connectNulls />
+                  <Line type="monotone" dataKey="revenue_live" stroke="var(--accent)" strokeDasharray="6 4" strokeWidth={2} dot={{ r: 4 }} connectNulls />
                 </AreaChart>
               </ResponsiveContainer>
             )}
@@ -121,21 +181,113 @@ export default function Reports() {
         <motion.div className="card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <div className="card-header">Daily Orders</div>
           <div className="card-body">
-            {data.length === 0 ? (
+            {chartData.length === 0 ? (
               <div className="muted">No report data available.</div>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={data}>
+                <BarChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                  <XAxis dataKey="date" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+                  <XAxis dataKey="date_label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <Tooltip contentStyle={TOOLTIP_STYLE} />
-                  <Bar dataKey="orders" fill="var(--data-4)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="orders" fill="var(--info)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
           </div>
         </motion.div>
+      </div>
+
+      <div className="app-grid-2">
+        <div className="card">
+          <div className="card-header">Hourly Order Heatmap</div>
+          <div className="card-body">
+            {hourlyHeatmap.length === 0 ? (
+              <div className="muted">No hourly order data available.</div>
+            ) : (
+              <div className="reports-heatmap-wrap">
+                {hourlyHeatmap.map((row) => (
+                  <div key={row.day} className="reports-heatmap-row">
+                    <div className="reports-heatmap-day">{row.day}</div>
+                    <div className="reports-heatmap-cells">
+                      {row.hours.map((cell) => {
+                        const intensity = hourlyHeatmapMax > 0 ? cell.count / hourlyHeatmapMax : 0
+                        return (
+                          <div
+                            key={`${row.day}-${cell.hour}`}
+                            className="reports-heatmap-cell"
+                            title={`${row.day} ${String(cell.hour).padStart(2, '0')}:00 - ${cell.count} orders`}
+                            style={{ background: `rgba(232, 93, 42, ${0.08 + intensity * 0.75})` }}
+                          />
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <div className="reports-heatmap-scale">00:00 to 23:00</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">Voice Order Accuracy</div>
+          <div className="card-body">
+            {voiceAccuracy ? (
+              <div className="reports-kpi-stack">
+                <div className="reports-kpi-value">{voiceAccuracyPct}%</div>
+                <div className="reports-kpi-sub">Completed without cancellation</div>
+                <div className="reports-kpi-meta">Voice orders sampled: {voiceTotal}</div>
+              </div>
+            ) : (
+              <div className="muted">No voice order accuracy data available.</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="app-grid-2">
+        <div className="card">
+          <div className="card-header">Combo Performance</div>
+          <div className="card-body">
+            {comboPerformance.length === 0 ? (
+              <div className="muted">No combo performance data available.</div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Combo</th>
+                    <th>Accepted Orders</th>
+                    <th>Acceptance Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comboPerformance.map((combo, idx) => (
+                    <tr key={`${combo.combo_name}-${idx}`}>
+                      <td style={{ fontWeight: 600 }}>{combo.combo_name}</td>
+                      <td>{combo.accepted_orders}</td>
+                      <td>{combo.acceptance_rate_pct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">Customer Repeat Rate</div>
+          <div className="card-body">
+            {repeatRate?.available ? (
+              <div className="reports-kpi-stack">
+                <div className="reports-kpi-value">{repeatRate.repeat_rate_pct}%</div>
+                <div className="reports-kpi-sub">Orders from returning customers</div>
+              </div>
+            ) : (
+              <div className="muted">{repeatRate?.note || 'Repeat-rate data is not available yet.'}</div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="app-grid-2">

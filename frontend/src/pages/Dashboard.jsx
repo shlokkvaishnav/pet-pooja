@@ -1,674 +1,486 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   getDashboardMetrics,
   getHiddenStars,
+  getMenuMatrix,
+  getPriceRecommendations,
   getRisks,
-  getCategoryBreakdown,
   getTrends,
-  getWowMom,
-  getPriceElasticity,
-  getCannibalization,
-  getPriceSensitivity,
-  getWasteAnalysis,
-  getCustomerReturns,
-  getMenuComplexity,
-  getOperationalMetrics,
+  getOpsReports,
+  getOpsInventory,
 } from '../api/client'
-import MetricCard from '../components/MetricCard'
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  LineChart, Line, PieChart, Pie, Cell, Legend, CartesianGrid, Area, AreaChart,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  BarChart,
+  Bar,
+  Cell,
 } from 'recharts'
-import { motion, AnimatePresence } from 'motion/react'
-import { StaggerReveal, ScrollReveal, staggerContainer, staggerItem, fadeInUp } from '../utils/animations'
+import { motion } from 'motion/react'
 import { formatRupees, formatRupeesShort, formatPct } from '../utils/format'
-import MagicBento from '../components/MagicBento'
-import { TrendUp, TrendDown, Warning, Star, EyeSlash, ArrowRight } from '@phosphor-icons/react'
+import { buildPriceOpportunities, buildUpsellCandidates } from '../utils/revenueInsights'
 
-const CHART_COLORS = ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316']
-const TOOLTIP_STYLE = { backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border-subtle)', color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-body)' }
-const TICK_STYLE = { fill: 'var(--text-secondary)', fontSize: 11 }
+const CHART_TOOLTIP = {
+  backgroundColor: 'var(--bg-surface)',
+  borderColor: 'var(--border-subtle)',
+  color: 'var(--text-primary)',
+  borderRadius: 8,
+  fontSize: 12,
+  fontFamily: 'var(--font-body)',
+}
+
+function pctChange(previous, current) {
+  if (!previous) return current > 0 ? 100 : 0
+  return ((current - previous) / previous) * 100
+}
+
+function periodTrend(values) {
+  if (!values || values.length < 2) return 0
+  const midpoint = Math.floor(values.length / 2)
+  const prev = values.slice(0, midpoint).reduce((sum, value) => sum + value, 0)
+  const curr = values.slice(midpoint).reduce((sum, value) => sum + value, 0)
+  return Number(pctChange(prev, curr).toFixed(1))
+}
+
+function trendTone(value) {
+  if (value > 0) return 'up'
+  if (value < 0) return 'down'
+  return 'flat'
+}
+
+function barColorByRank(index, total) {
+  if (total <= 1) return '#f59e0b'
+  const ratio = index / (total - 1)
+  if (ratio < 0.33) return '#2A7A50'
+  if (ratio < 0.66) return '#C07A20'
+  return '#8C2A2A'
+}
+
+function Sparkline({ data, color }) {
+  return (
+    <ResponsiveContainer width="100%" height={28}>
+      <LineChart data={data} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+        <Line type="monotone" dataKey="value" stroke={color} strokeWidth={2} dot={false} isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  )
+}
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [metrics, setMetrics] = useState(null)
+  const [reports, setReports] = useState(null)
+  const [trends, setTrends] = useState(null)
+  const [menuMatrixItems, setMenuMatrixItems] = useState([])
+  const [priceRecommendations, setPriceRecommendations] = useState([])
   const [hiddenStars, setHiddenStars] = useState([])
   const [riskItems, setRiskItems] = useState([])
-  const [categoryData, setCategoryData] = useState([])
-  const [trends, setTrends] = useState(null)
-  const [wowMom, setWowMom] = useState([])
-  const [elasticity, setElasticity] = useState([])
-  const [cannibalization, setCannibalization] = useState([])
-  const [priceSensitivity, setPriceSensitivity] = useState([])
-  const [waste, setWaste] = useState(null)
-  const [customerReturns, setCustomerReturns] = useState(null)
-  const [menuComplexity, setMenuComplexity] = useState([])
-  const [showHealthBreakdown, setShowHealthBreakdown] = useState(false)
+  const [lowStock, setLowStock] = useState([])
   const [secondaryLoaded, setSecondaryLoaded] = useState(false)
+  const [secondaryErrors, setSecondaryErrors] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let active = true
 
-    // Load critical metrics first so the page can render quickly.
-    getDashboardMetrics()
-      .then((m) => {
+    Promise.all([getDashboardMetrics(), getOpsReports(30)])
+      .then(([dashboardData, reportData]) => {
         if (!active) return
-        setMetrics(m)
+        setMetrics(dashboardData)
+        setReports(reportData)
       })
-      .catch(err => {
-        console.error('Dashboard load failed:', err)
+      .catch((error) => {
+        console.error('Dashboard load failed:', error)
       })
       .finally(() => {
         if (active) setLoading(false)
       })
 
-    // Load secondary datasets in the background.
+    const errors = []
+    const loadSafe = (label, promise, fallback) =>
+      promise.catch((error) => {
+        errors.push(label)
+        console.error(`${label} load failed:`, error)
+        return fallback
+      })
+
     Promise.all([
-      getHiddenStars().catch(() => ({ items: [] })),
-      getRisks().catch(() => ({ items: [] })),
-      getCategoryBreakdown().catch(() => ({ categories: [] })),
-      getTrends().catch(() => null),
-      getWowMom().catch(() => ({ items: [] })),
-      getPriceElasticity().catch(() => ({ items: [] })),
-      getCannibalization().catch(() => ({ items: [] })),
-      getPriceSensitivity().catch(() => ({ items: [] })),
-      getWasteAnalysis().catch(() => null),
-      getCustomerReturns().catch(() => null),
-      getMenuComplexity().catch(() => ({ categories: [] })),
-    ])
-      .then(([hs, ri, cb, tr, wm, el, cn, ps, wa, cr, mc]) => {
-        if (!active) return
-        setHiddenStars((hs.items || hs || []).slice(0, 5))
-        setRiskItems((ri.items || ri || []).slice(0, 5))
-        setCategoryData(cb.categories || cb || [])
-        setTrends(tr)
-        setWowMom((wm.items || []).slice(0, 10))
-        setElasticity((el.items || []).slice(0, 10))
-        setCannibalization((cn.items || []).slice(0, 8))
-        setPriceSensitivity((ps.items || []).slice(0, 8))
-        setWaste(wa)
-        setCustomerReturns(cr)
-        setMenuComplexity(mc.categories || [])
-      })
-      .finally(() => {
-        if (active) setSecondaryLoaded(true)
-      })
+      loadSafe('Hidden Stars', getHiddenStars(), { items: [] }),
+      loadSafe('Risks', getRisks(), { items: [] }),
+      loadSafe('Trends', getTrends(), null),
+      loadSafe('Inventory', getOpsInventory(30), { low_stock: [] }),
+      loadSafe('Menu Matrix', getMenuMatrix(), { items: [] }),
+      loadSafe('Price Recommendations', getPriceRecommendations(), { recommendations: [] }),
+    ]).then(([hs, risks, trendData, inventory, menuMatrix, priceData]) => {
+      if (!active) return
+      setHiddenStars((hs.items || []).slice(0, 6))
+      setRiskItems((risks.items || []).slice(0, 6))
+      setTrends(trendData)
+      setLowStock((inventory.low_stock || []).slice(0, 6))
+      setMenuMatrixItems((menuMatrix?.items || []))
+      setPriceRecommendations((priceData?.recommendations || []))
+      setSecondaryErrors(errors)
+      setSecondaryLoaded(true)
+    })
 
     return () => {
       active = false
     }
   }, [])
 
+  const dailySeries = reports?.daily || []
+  const revenueSeries = useMemo(
+    () => dailySeries.map((row) => ({ day: row.date?.slice(5) || '', value: row.revenue || 0 })),
+    [dailySeries],
+  )
+  const orderSeries = useMemo(
+    () => dailySeries.map((row) => ({ day: row.date?.slice(5) || '', value: row.orders || 0 })),
+    [dailySeries],
+  )
+  const aovSeries = useMemo(
+    () => dailySeries.map((row) => ({ day: row.date?.slice(5) || '', value: row.orders ? row.revenue / row.orders : 0 })),
+    [dailySeries],
+  )
+
+  const revenueTrend = periodTrend(revenueSeries.map((point) => point.value))
+  const ordersTrend = periodTrend(orderSeries.map((point) => point.value))
+  const aovTrend = periodTrend(aovSeries.map((point) => point.value))
+  const upsellItems = useMemo(() => (
+    buildUpsellCandidates({
+      items: menuMatrixItems,
+      trends,
+      currentOrderItems: [],
+      limit: 6,
+    })
+  ), [menuMatrixItems, trends])
+
+  const priceInsight = useMemo(() => (
+    buildPriceOpportunities({
+      items: menuMatrixItems,
+      combos: [],
+      apiRecommendations: priceRecommendations,
+      totalOrders: metrics?.total_orders || 0,
+    })
+  ), [menuMatrixItems, priceRecommendations, metrics])
+
   if (loading) {
     return (
-      <div style={{ padding: 'var(--space-12)' }}>
-        <div className="grid-3" style={{ marginBottom: 'var(--space-6)' }}>
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="skeleton" style={{ height: 130, animationDelay: `${i * 100}ms` }} />
-          ))}
-        </div>
+      <div style={{ padding: 'var(--space-8)' }}>
+        <div className="skeleton" style={{ height: 88, marginBottom: 'var(--space-6)' }} />
         <div className="grid-2">
-          <div className="skeleton" style={{ height: 300 }} />
-          <div className="skeleton" style={{ height: 300 }} />
+          <div className="skeleton" style={{ height: 280 }} />
+          <div className="skeleton" style={{ height: 280 }} />
         </div>
       </div>
     )
   }
 
   if (!metrics) {
-    return <div className="loading">Failed to load data. Is the backend running?</div>
+    return <div className="loading">Failed to load dashboard data. Ensure the backend is running.</div>
   }
 
-  const healthBreakdown = metrics.health_score_breakdown || {}
-  const driftItems = trends?.quadrant_drift || []
-  const peakHours = metrics.peak_hours || []
-  const seasonalPatterns = trends?.seasonal_patterns || []
+  const topItemsByRevenue = [...(trends?.item_trends || [])]
+    .sort((a, b) => (b.revenue_last_30d || 0) - (a.revenue_last_30d || 0))
+    .slice(0, 8)
+    .reverse()
 
-  const categoryPieData = categoryData.slice(0, 6).map((c, i) => ({
-    name: c.category_name || c.category,
-    value: c.total_revenue || 0,
-    fill: CHART_COLORS[i % CHART_COLORS.length],
-  }))
+  const hourlyOrders = [...(metrics.peak_hours || [])]
+    .map((row) => ({ label: row.label || `${row.hour}:00`, orders: row.order_count || 0 }))
 
-  const alerts = []
-  if (riskItems.length > 0) {
-    alerts.push({ type: 'danger', text: `${riskItems.length} underperformers dragging avg margin` })
-  }
-  if (driftItems.length > 0) {
-    alerts.push({ type: 'warning', text: `${driftItems.length} items drifting quadrants` })
-  }
-  if (hiddenStars.length > 0) {
-    alerts.push({ type: 'info', text: `${hiddenStars.length} hidden gems ready to promote` })
-  }
+  const driftItems = (trends?.quadrant_drift || []).slice(0, 5)
 
-  const chartTooltipStyle = {
-    backgroundColor: 'var(--bg-surface)',
-    borderColor: 'var(--border-subtle)',
-    color: 'var(--text-primary)',
-    borderRadius: 8,
-    fontSize: 12,
-    fontFamily: 'var(--font-body)',
-  }
+  const alertChips = [
+    { label: `${riskItems.length} underperformers`, tone: 'danger' },
+    { label: `${hiddenStars.length} hidden gems`, tone: 'success' },
+    { label: `${lowStock.length} low stock alerts`, tone: 'warning' },
+    { label: `${driftItems.length} quadrant drifts`, tone: 'info' },
+  ]
+
+  const kpiChips = [
+    {
+      title: 'Revenue (30D)',
+      value: formatRupeesShort(metrics.total_revenue || 0),
+      trend: revenueTrend,
+      sparkline: revenueSeries,
+    },
+    {
+      title: 'Orders (30D)',
+      value: (metrics.total_orders || 0).toLocaleString('en-IN'),
+      trend: ordersTrend,
+      sparkline: orderSeries,
+    },
+    {
+      title: 'Avg Order Value',
+      value: formatRupees(metrics.avg_order_value || 0),
+      trend: aovTrend,
+      sparkline: aovSeries,
+    },
+    {
+      title: 'Menu Health',
+      value: `${metrics.health_score || 0}/100`,
+      trend: Number((hiddenStars.length - riskItems.length).toFixed(1)),
+      sparkline: revenueSeries,
+    },
+  ]
 
   return (
     <motion.div
-      className="app-page"
+      className="app-page dash-page"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35 }}
+      transition={{ duration: 0.3 }}
     >
-      <motion.div
-        className="app-hero"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1, duration: 0.5 }}
-      >
-        <div>
-          <div className="app-hero-eyebrow">Overview</div>
-          <h1 className="app-hero-title">Revenue Overview</h1>
-          <p className="app-hero-sub">
-            Last updated - {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+      <section className="dash-header-compact">
+        <div className="dash-header-main">
+          <h1 className="dash-title">Dashboard Overview</h1>
+          <p className="dash-subtitle">
+            <span className="dash-live-dot" />
+            Last updated {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
           </p>
         </div>
-        <div className="app-hero-metrics">
-          {[
-            { label: 'Total Revenue', value: formatRupeesShort(metrics.total_revenue) },
-            { label: 'Orders (30d)', value: metrics.total_orders || 0 },
-            { label: 'Menu Health', value: metrics.health_score || 0 },
-          ].map((item) => (
-            <div key={item.label} className="app-kpi">
-              <div className="app-kpi-label">{item.label}</div>
-              <div className="app-kpi-value">{item.value}</div>
-            </div>
-          ))}
+
+        <div className="dash-kpi-chip-row">
+          {kpiChips.map((chip) => {
+            const tone = trendTone(chip.trend)
+            return (
+              <div key={chip.title} className="dash-kpi-chip">
+                <div className="dash-kpi-chip-head">
+                  <span className="dash-kpi-chip-label">{chip.title}</span>
+                  <span className={`dash-kpi-trend dash-kpi-trend--${tone}`}>
+                    {chip.trend > 0 ? '+' : ''}{chip.trend}%
+                  </span>
+                </div>
+                <div className="dash-kpi-chip-value">{chip.value}</div>
+                <div className="dash-kpi-sparkline">
+                  <Sparkline data={chip.sparkline} color={tone === 'up' ? '#2A7A50' : tone === 'down' ? '#8C2A2A' : '#9E9AAF'} />
+                </div>
+              </div>
+            )
+          })}
         </div>
-      </motion.div>
+      </section>
 
-      {/* Magic Bento Grid */}
-      <MagicBento metrics={metrics} secondaryLoaded={secondaryLoaded} />
-
-      {!secondaryLoaded && (
-        <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
-          <div className="card-body" style={{ fontSize: 12, color: 'var(--text-muted)', padding: 'var(--space-3) var(--space-5)' }}>
-            Loading advanced insights...
+      {secondaryLoaded && secondaryErrors.length > 0 && (
+        <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
+          <div className="card-body" style={{ color: 'var(--warning)', fontSize: 12 }}>
+            Some sections loaded partially: {secondaryErrors.join(', ')}
           </div>
         </div>
       )}
 
-      {/* Zone 2: Alert Rail */}
-      {alerts.length > 0 && (
-        <div style={{ display: 'flex', gap: 'var(--space-3)', marginBottom: 'var(--space-6)', overflowX: 'auto', paddingBottom: 4 }}>
-          {alerts.map((alert, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.3 + i * 0.08, duration: 0.3 }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-2)',
-                padding: 'var(--space-2) var(--space-4)',
-                background: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-full)',
-                fontSize: 12,
-                color: 'var(--text-secondary)',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
-            >
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                background: alert.type === 'danger' ? 'var(--danger)' : alert.type === 'warning' ? 'var(--warning)' : 'var(--info)',
-              }} />
-              {alert.text}
-              <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />
-            </motion.div>
-          ))}
-        </div>
-      )}
+      <section className="dash-alert-strip" aria-label="AI insight alerts">
+        {alertChips.map((chip) => (
+          <div key={chip.label} className={`dash-alert-chip dash-alert-chip--${chip.tone}`}>
+            {chip.label}
+          </div>
+        ))}
+      </section>
 
-      {/* Zone 3: KPI Cards */}
-      <StaggerReveal className="grid-3" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
-        <motion.div variants={staggerItem}>
-          <MetricCard label="Menu Health" value={metrics.health_score || 0} color={metrics.health_score >= 60 ? 'var(--success)' : metrics.health_score >= 40 ? 'var(--warning)' : 'var(--danger)'} icon="" />
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <MetricCard label="Avg Contribution Margin" value={formatPct(metrics.avg_cm_percent)} color="var(--success)" icon="" />
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <MetricCard label="Star Items" value={metrics.stars_count || hiddenStars.length || 0} color="var(--success)" icon="" />
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <MetricCard label="Hidden Gems" value={hiddenStars.length || 0} color="var(--data-5)" icon="" />
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <MetricCard label="Underperformers" value={metrics.items_at_risk_count || 0} color="var(--danger)" icon="" />
-        </motion.div>
-        <motion.div variants={staggerItem}>
-          <MetricCard label="Price Opportunities" value={formatRupeesShort(metrics.uplift_potential)} color="var(--warning)" icon="" />
-        </motion.div>
-      </StaggerReveal>
-
-      {/* Health Score Breakdown (collapsible) */}
-      <div style={{ marginBottom: 'var(--space-6)' }}>
-        <button className="btn btn-ghost" onClick={() => setShowHealthBreakdown(!showHealthBreakdown)} style={{ fontSize: 12, marginBottom: 'var(--space-3)' }}>
-          {showHealthBreakdown ? '' : ''} Health Score Breakdown
-        </button>
-        <AnimatePresence>
-          {showHealthBreakdown && healthBreakdown.components && (
-            <motion.div
-              className="card"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-            >
-              <div className="card-body">
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 'var(--space-4)' }}>
-                  {healthBreakdown.explanation}
-                </p>
-                <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
-                  {healthBreakdown.components.map((c, i) => (
-                    <div key={i} style={{
-                      flex: '1 1 200px', padding: 'var(--space-4)', background: 'var(--bg-elevated)',
-                      borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)',
-                    }}>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{c.name}</div>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 600, color: c.score >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-                        {c.score > 0 ? '+' : ''}{c.score} <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>/ {c.max}</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{c.detail}</div>
-                    </div>
-                  ))}
-                </div>
+      <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card-header">AI Upsell Opportunities</div>
+        <div className="card-body" style={{ overflowX: 'auto' }}>
+          {secondaryLoaded ? (
+            upsellItems.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                No strong upsell candidates yet. Add more order history to improve candidate ranking.
               </div>
-            </motion.div>
+            ) : (
+              <div style={{ display: 'flex', gap: 'var(--space-3)', minWidth: 'max-content' }}>
+                {upsellItems.slice(0, 6).map((item) => (
+                  <div
+                    key={item.item_id}
+                    className="card"
+                    style={{ minWidth: 260, borderColor: 'var(--border-subtle)' }}
+                  >
+                    <div className="card-body">
+                      <div style={{ fontWeight: 700, marginBottom: 6 }}>{item.name}</div>
+                      <div style={{ color: 'var(--success)', fontWeight: 700, marginBottom: 8 }}>
+                        CM {formatPct(item.cm_percent)}
+                      </div>
+                      <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                        {item.reason}
+                      </p>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ fontSize: 12, padding: 0 }}
+                        onClick={() => navigate(`/dashboard/menu-analysis?item=${item.item_id}`)}
+                      >
+                        View Item
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 'var(--space-3)' }}>
+              {Array.from({ length: 3 }).map((_, idx) => (
+                <div key={idx} className="skeleton" style={{ height: 130 }} />
+              ))}
+            </div>
           )}
-        </AnimatePresence>
-      </div>
+        </div>
+      </section>
 
-      {/* Zone 4: Intelligence Split — 60/40 */}
-      <StaggerReveal style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 'var(--space-6)', marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
-        <motion.div className="card" variants={staggerItem}>
-          <div className="card-header">Average CM% per Category</div>
+      <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Price Opportunities</span>
+          <Link to="/dashboard/menu-analysis?tab=price-opportunities" className="btn btn-ghost" style={{ fontSize: 12 }}>
+            Review Suggestions
+          </Link>
+        </div>
+        <div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Identified Opportunities</div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--accent)' }}>
+              {priceInsight.opportunities.length}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 420 }}>
+            {priceInsight.usedSynthetic
+              ? 'Using display-only synthetic recommendations because order history is limited.'
+              : 'Recommendations are based on BCG quadrant behavior, margin signals, and bundle opportunities.'}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card">
+          <div className="card-header">Revenue Trend (30D)</div>
           <div className="card-body">
             <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={categoryData} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
-                <XAxis dataKey="category" tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'Sora' }} />
-                <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
-                <Tooltip cursor={{ fill: 'rgba(30,30,40,0.5)' }} contentStyle={chartTooltipStyle} />
-                <Bar dataKey="avg_cm_pct" fill="var(--accent)" radius={[4, 4, 0, 0]} />
+              <LineChart data={revenueSeries} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                <XAxis dataKey="day" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+                <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} tickFormatter={(v) => formatRupeesShort(v)} />
+                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} />
+                <Line type="monotone" dataKey="value" stroke="#E85D2A" strokeWidth={2.5} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">Top Menu Items by Revenue</div>
+          <div className="card-body">
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={topItemsByRevenue} layout="vertical" margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
+                <XAxis type="number" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} tickFormatter={(v) => formatRupeesShort(v)} />
+                <YAxis dataKey="name" type="category" width={120} tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+                <Tooltip contentStyle={CHART_TOOLTIP} formatter={(value) => formatRupees(value)} />
+                <Bar dataKey="revenue_last_30d" radius={[0, 6, 6, 0]}>
+                  {topItemsByRevenue.map((_, index) => (
+                    <Cell key={index} fill={barColorByRank(index, topItemsByRevenue.length)} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </motion.div>
+        </div>
+      </section>
 
-        <motion.div variants={staggerItem} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
-          <div className="card" style={{ flex: 1 }}>
-            <div className="card-header" style={{ color: 'var(--data-5)' }}>Hidden Gems</div>
-            <div className="card-body" style={{ padding: 0 }}>
-              {hiddenStars.length === 0 ? (
-                <div style={{ padding: 'var(--space-6)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>No hidden gems found.</div>
-              ) : hiddenStars.map(item => (
-                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-3) var(--space-6)', borderBottom: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.name}</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--success)' }}>
-                    {formatPct(item.cm_percent || item.margin_pct)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card" style={{ flex: 1 }}>
-            <div className="card-header" style={{ color: 'var(--danger)' }}>Underperformers</div>
-            <div className="card-body" style={{ padding: 0 }}>
-              {riskItems.length === 0 ? (
-                <div style={{ padding: 'var(--space-6)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>No items at risk.</div>
-              ) : riskItems.slice(0, 5).map(item => (
-                <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-3) var(--space-6)', borderBottom: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.name}</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--danger)' }}>
-                    {formatPct(item.cm_percent || item.margin_pct)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </motion.div>
-      </StaggerReveal>
-
-      {/* Peak Hours + Quadrant Drift */}
-      <StaggerReveal className="grid-2" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
-        <motion.div className="card" variants={staggerItem}>
+      <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card">
           <div className="card-header">Orders by Hour</div>
           <div className="card-body">
-            {peakHours.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--space-10)' }}>No hourly data available.</div>
+            {hourlyOrders.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No hourly order data available.</div>
             ) : (
               <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={peakHours.sort((a, b) => a.hour - b.hour)} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
+                <BarChart data={hourlyOrders} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
-                  <Tooltip contentStyle={chartTooltipStyle} />
-                  <Bar dataKey="order_count" fill="var(--data-5)" radius={[4, 4, 0, 0]} name="Orders" />
+                  <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
+                  <Tooltip contentStyle={CHART_TOOLTIP} />
+                  <Bar dataKey="orders" radius={[4, 4, 0, 0]}>
+                    {hourlyOrders.map((_, index) => (
+                      <Cell key={index} fill={barColorByRank(index, hourlyOrders.length)} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}
           </div>
-        </motion.div>
+        </div>
 
-        <motion.div className="card" variants={staggerItem}>
-          <div className="card-header" style={{ color: 'var(--warning)' }}>Quadrant Drift Alerts</div>
+        <div className="card">
+          <div className="card-header">Low Stock Alerts</div>
           <div className="card-body">
-            {driftItems.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No significant quadrant shifts detected.</div>
-            ) : driftItems.slice(0, 5).map((item, i) => (
-              <div key={i} style={{ padding: 'var(--space-2) 0', borderBottom: '1px solid var(--border-subtle)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.name}</span>
-                  <span className={`tag ${item.drift_direction?.includes('dog') ? 'tag-red' : 'tag-amber'}`}>
-                    {item.drift_direction}
-                  </span>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {item.drift_warning}  Pop: {item.popularity_trend_pct}% {item.trend_arrow}
-                </div>
+            {lowStock.length === 0 ? (
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No critical low-stock ingredients.</div>
+            ) : (
+              <div className="dash-low-stock-list">
+                {lowStock.map((item) => (
+                  <div key={item.ingredient_id} className="dash-low-stock-item">
+                    <div>
+                      <div className="dash-low-stock-name">{item.name}</div>
+                      <div className="dash-low-stock-meta">{item.current_stock} {item.unit} left • Reorder at {item.reorder_level}</div>
+                    </div>
+                    <button className="btn btn-ghost" style={{ fontSize: 11 }}>Reorder</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card">
+          <div className="card-header">Hidden Gems</div>
+          <div className="card-body" style={{ padding: 0 }}>
+            {hiddenStars.length === 0 ? (
+              <div style={{ padding: 'var(--space-5)', color: 'var(--text-muted)', fontSize: 13 }}>No hidden gems found.</div>
+            ) : hiddenStars.map((item) => (
+              <div key={item.item_id} className="dash-list-row">
+                <span>{item.name}</span>
+                <span style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)' }}>{formatPct(item.cm_percent || item.margin_pct)}</span>
               </div>
             ))}
           </div>
-        </motion.div>
-      </StaggerReveal>
+        </div>
 
-      {/* Revenue by Category Pie */}
-      <StaggerReveal className="grid-2" style={{ marginBottom: 'var(--space-6)' }} variants={staggerContainer}>
-        <motion.div className="card" variants={staggerItem}>
-          <div className="card-header">Revenue by Category</div>
-          <div className="card-body" style={{ display: 'flex', justifyContent: 'center' }}>
-            {categoryPieData.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: 'var(--space-10)' }}>No data.</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={280}>
-                <PieChart>
-                  <Pie data={categoryPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                    {categoryPieData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
-                  </Pie>
-                  <Tooltip contentStyle={chartTooltipStyle} formatter={(v) => formatRupees(v)} />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </motion.div>
-
-        {metrics.orders_by_type?.length > 0 && (
-          <motion.div className="card" variants={staggerItem}>
-            <div className="card-header">Orders by Type (30d)</div>
-            <div className="card-body">
-              <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
-                {metrics.orders_by_type.map((t, i) => (
-                  <motion.div key={i} style={{
-                    flex: '1 1 80px', padding: 'var(--space-4)', background: 'var(--bg-elevated)',
-                    borderRadius: 'var(--radius-md)', textAlign: 'center',
-                    border: '1px solid var(--border-subtle)',
-                  }}
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: i * 0.1, duration: 0.4 }}
-                    whileHover={{ scale: 1.03, transition: { duration: 0.15 } }}
-                  >
-                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                      {t.type?.replace('_', ' ')}
-                    </div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, color: 'var(--text-primary)', margin: '4px 0' }}>{t.count}</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>{formatRupees(t.revenue)}</div>
-                  </motion.div>
-                ))}
+        <div className="card">
+          <div className="card-header">Underperformers</div>
+          <div className="card-body" style={{ padding: 0 }}>
+            {riskItems.length === 0 ? (
+              <div style={{ padding: 'var(--space-5)', color: 'var(--text-muted)', fontSize: 13 }}>No items at risk.</div>
+            ) : riskItems.map((item) => (
+              <div key={item.item_id} className="dash-list-row">
+                <span>{item.name}</span>
+                <span style={{ color: 'var(--danger)', fontFamily: 'var(--font-mono)' }}>{formatPct(item.cm_percent || item.margin_pct)}</span>
               </div>
-            </div>
-          </motion.div>
-        )}
-      </StaggerReveal>
-
-      {/* WoW / MoM Revenue Changes */}
-      {wowMom.length > 0 && (
-        <ScrollReveal variants={fadeInUp}>
-          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
-            <div className="card-header">Week-over-Week / Month-over-Month Revenue Changes</div>
-            <div className="card-body">
-              <div style={{ overflowX: 'auto' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th>WoW Change</th>
-                      <th>MoM Change</th>
-                      <th>This Week Revenue</th>
-                      <th>Last Week Revenue</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {wowMom.map((item, i) => (
-                      <tr key={i}>
-                        <td style={{ fontWeight: 600 }}>{item.name}</td>
-                        <td style={{ color: (item.wow_change_pct || 0) >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
-                          {(item.wow_change_pct || 0) > 0 ? '+' : ''}{item.wow_change_pct?.toFixed(1) || '—'}%
-                        </td>
-                        <td style={{ color: (item.mom_change_pct || 0) >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
-                          {(item.mom_change_pct || 0) > 0 ? '+' : ''}{item.mom_change_pct?.toFixed(1) || '—'}%
-                        </td>
-                        <td>{formatRupees(item.this_week_revenue)}</td>
-                        <td>{formatRupees(item.last_week_revenue)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            ))}
           </div>
-        </ScrollReveal>
-      )}
+        </div>
+      </section>
 
-      {/* Price Elasticity */}
-      {elasticity.length > 0 && (
-        <ScrollReveal variants={fadeInUp}>
-          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
-            <div className="card-header">Price Elasticity Estimates</div>
-            <div className="card-body">
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>Items where price changes affected demand volume.</p>
-              <div style={{ overflowX: 'auto' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th>Price Change</th>
-                      <th>Volume Change</th>
-                      <th>Elasticity</th>
-                      <th>Classification</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {elasticity.map((item, i) => (
-                      <tr key={i}>
-                        <td style={{ fontWeight: 600 }}>{item.name}</td>
-                        <td>{item.price_change_pct?.toFixed(1) || '—'}%</td>
-                        <td style={{ color: (item.volume_change_pct || 0) >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-                          {item.volume_change_pct?.toFixed(1) || '—'}%
-                        </td>
-                        <td>{item.elasticity?.toFixed(2) || '—'}</td>
-                        <td>
-                          <span className={`tag tag-${item.classification === 'elastic' ? 'red' : item.classification === 'inelastic' ? 'green' : 'blue'}`}>
-                            {item.classification || '—'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </ScrollReveal>
-      )}
-
-      {/* Cannibalization + Price Sensitivity */}
-      <div className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
-        {cannibalization.length > 0 && (
-          <div className="card">
-            <div className="card-header" style={{ color: 'var(--danger)' }}>Cannibalization Alerts</div>
-            <div className="card-body">
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>New items that may be eating into existing sales.</p>
-              {cannibalization.map((item, i) => (
-                <div key={i} style={{ padding: 'var(--space-3) 0', borderBottom: '1px solid var(--border-subtle)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.new_item || item.name}</span>
-                    <span style={{ fontSize: 11, color: 'var(--danger)', fontWeight: 600 }}>
-                      {item.cannibalization_pct?.toFixed(0) || item.overlap_pct?.toFixed(0) || '—'}% overlap
-                    </span>
+      <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card-header">Quadrant Drift Alerts</div>
+        <div className="card-body">
+          {driftItems.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No significant drift alerts at the moment.</div>
+          ) : (
+            <div className="dash-drift-grid">
+              {driftItems.map((item) => (
+                <div key={item.item_id} className="dash-drift-card">
+                  <div className="dash-drift-top">
+                    <strong>{item.name}</strong>
+                    <span className="dash-drift-badge">{item.drift_direction}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                    Affected: {item.affected_item || item.victim || '—'}  {item.recommendation || ''}
-                  </div>
+                  <p>{item.drift_warning}</p>
+                  <button className="btn btn-ghost" style={{ fontSize: 11 }}>Promote This Item</button>
                 </div>
               ))}
             </div>
-          </div>
-        )}
-
-        {priceSensitivity.length > 0 && (
-          <div className="card">
-            <div className="card-header" style={{ color: 'var(--warning)' }}>Price Sensitivity — Plowhorse Items</div>
-            <div className="card-body">
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>High-volume, low-margin items that could absorb a price increase.</p>
-              {priceSensitivity.map((item, i) => (
-                <div key={i} style={{ padding: 'var(--space-3) 0', borderBottom: '1px solid var(--border-subtle)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{item.name}</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--success)' }}>
-                      +{formatRupees(item.projected_revenue_gain || item.revenue_impact)}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                    Current: {formatRupees(item.current_price)}  Suggested: {formatRupees(item.suggested_price || item.recommended_price)} | {item.recommendation || ''}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Waste & Voids + Customer Returns */}
-      <div className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
-        {waste && (
-          <div className="card">
-            <div className="card-header" style={{ color: 'var(--danger)' }}>Waste & Void Analysis (30d)</div>
-            <div className="card-body">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total Waste Cost</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--danger)' }}>{formatRupees(waste.total_waste_cost)}</div>
-                </div>
-                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Void Rate</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--warning)' }}>{waste.void_rate_pct?.toFixed(1) || 0}%</div>
-                </div>
-              </div>
-              {waste.top_voided_items?.length > 0 && (
-                <>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-2)', fontWeight: 600 }}>Top Voided Items</div>
-                  {waste.top_voided_items.slice(0, 5).map((item, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: 'var(--space-2) 0', fontSize: 13, borderBottom: '1px solid var(--border-subtle)' }}>
-                      <span>{item.name}</span>
-                      <span style={{ color: 'var(--danger)', fontWeight: 600 }}>{item.void_count || item.count} voids</span>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {customerReturns && (
-          <div className="card">
-            <div className="card-header" style={{ color: 'var(--success)' }}>Customer Return Rates</div>
-            <div className="card-body">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Repeat Rate</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--success)' }}>{customerReturns.repeat_rate_pct?.toFixed(1) || 0}%</div>
-                </div>
-                <div style={{ padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Unique Tables</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>{customerReturns.unique_tables || customerReturns.unique_customers || 0}</div>
-                </div>
-              </div>
-              {customerReturns.top_returning_tables?.length > 0 && (
-                <>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-2)', fontWeight: 600 }}>Most Frequent Tables</div>
-                  {customerReturns.top_returning_tables.slice(0, 5).map((t, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: 'var(--space-2) 0', fontSize: 13, borderBottom: '1px solid var(--border-subtle)' }}>
-                      <span>{t.table_id || t.table || `Table ${i + 1}`}</span>
-                      <span style={{ fontWeight: 600 }}>{t.visit_count || t.visits} visits</span>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Menu Complexity */}
-      {menuComplexity.length > 0 && (
-        <ScrollReveal variants={fadeInUp}>
-          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
-            <div className="card-header">Menu Complexity by Category</div>
-            <div className="card-body">
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>Categories with more than 7 items may suffer from decision fatigue.</p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 'var(--space-3)' }}>
-                {menuComplexity.map((cat, i) => (
-                  <div key={i} style={{
-                    padding: 'var(--space-4)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)',
-                    border: `1px solid ${cat.item_count > 7 || cat.alert ? 'var(--warning)' : 'var(--border-subtle)'}`,
-                  }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: 'var(--text-primary)' }}>{cat.category_name || cat.name}</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>{cat.item_count || cat.count}</div>
-                    <div style={{ fontSize: 11, color: (cat.item_count > 7 || cat.alert) ? 'var(--warning)' : 'var(--text-muted)' }}>
-                      {(cat.item_count > 7 || cat.alert) ? ' Consider trimming' : 'Optimal range'}
-                    </div>
-                    {cat.complexity_score != null && (
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Score: {cat.complexity_score}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </ScrollReveal>
-      )}
-
-      {/* Seasonal Patterns */}
-      {seasonalPatterns.length > 0 && (
-        <ScrollReveal variants={fadeInUp}>
-          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
-            <div className="card-header">Seasonal / Day-of-Week Patterns</div>
-            <div className="card-body">
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={seasonalPatterns} margin={{ top: 10, right: 10, bottom: 20, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                  <XAxis dataKey="day" tick={TICK_STYLE} />
-                  <YAxis tick={TICK_STYLE} />
-                  <Tooltip contentStyle={chartTooltipStyle} />
-                  <Bar dataKey="avg_revenue" fill="var(--warning)" radius={[4, 4, 0, 0]} name="Avg Revenue" />
-                  <Bar dataKey="avg_orders" fill="var(--info)" radius={[4, 4, 0, 0]} name="Avg Orders" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </ScrollReveal>
-      )}
+          )}
+        </div>
+      </section>
     </motion.div>
   )
 }

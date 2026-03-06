@@ -26,6 +26,7 @@ logger = logging.getLogger("petpooja.api.voice")
 # Max audio file size: 10 MB
 _MAX_AUDIO_SIZE = 10 * 1024 * 1024
 _ALLOWED_EXTENSIONS = {".wav", ".mp3", ".ogg", ".webm", ".m4a", ".flac"}
+_AUDIO_READ_CHUNK_SIZE = 1024 * 1024
 
 
 class TextInput(BaseModel):
@@ -49,23 +50,45 @@ async def _save_audio_temp(audio: UploadFile) -> str:
     if suffix not in _ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported audio format '{suffix}'. Allowed: {', '.join(_ALLOWED_EXTENSIONS)}",
+            detail=f"Unsupported audio format '{suffix}'. Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}",
         )
 
-    content = await audio.read()
-    if len(content) > _MAX_AUDIO_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Audio file too large ({len(content)} bytes). Max: {_MAX_AUDIO_SIZE} bytes.",
-        )
-    if len(content) == 0:
-        raise HTTPException(status_code=400, detail="Empty audio file.")
+    # Fast reject if client sends a valid Content-Length header.
+    content_length = audio.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _MAX_AUDIO_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Audio file too large ({content_length} bytes). Max: {_MAX_AUDIO_SIZE} bytes.",
+                )
+        except ValueError:
+            # Ignore invalid header and fall back to streamed validation.
+            pass
 
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    total_bytes = 0
     try:
-        tmp.write(content)
+        while True:
+            chunk = await audio.read(_AUDIO_READ_CHUNK_SIZE)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if total_bytes > _MAX_AUDIO_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Audio file too large ({total_bytes} bytes). Max: {_MAX_AUDIO_SIZE} bytes.",
+                )
+            tmp.write(chunk)
+
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="Empty audio file.")
+
         tmp.flush()
         return tmp.name
+    except Exception:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
     finally:
         tmp.close()
 
@@ -221,7 +244,6 @@ async def process_text(
 
 @router.post("/speak")
 async def speak_text(
-    request: Request,
     body: SpeakInput,
 ):
     """
