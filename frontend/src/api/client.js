@@ -1,18 +1,28 @@
 import axios from 'axios'
+import {
+  API_BASE_URL,
+  API_TIMEOUT,
+  API_AUDIO_TIMEOUT,
+  SHORT_CACHE_TTL,
+  DEFAULT_CACHE_TTL,
+  LONG_CACHE_TTL,
+  MAX_CACHE_ENTRIES,
+  TRANSIENT_HTTP_STATUSES,
+} from '../config'
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000/api',
-  timeout: 30000,
+  baseURL: API_BASE_URL,
+  timeout: API_TIMEOUT,
 })
 
 const inflightGets = new Map()
 const responseCache = new Map()
 
-const SHORT_CACHE_TTL_MS = 20000
-const DEFAULT_CACHE_TTL_MS = 45000
-const LONG_CACHE_TTL_MS = 120000
-const MAX_CACHE_ENTRIES = 200
-const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
+const SHORT_CACHE_TTL_MS = SHORT_CACHE_TTL
+const DEFAULT_CACHE_TTL_MS = DEFAULT_CACHE_TTL
+const LONG_CACHE_TTL_MS = LONG_CACHE_TTL
+const MAX_CACHE_ENTRIES_LIMIT = MAX_CACHE_ENTRIES
+const TRANSIENT_STATUS = TRANSIENT_HTTP_STATUSES
 
 function normalizeError(error) {
   const status = error?.response?.status
@@ -47,7 +57,7 @@ function readCache(key) {
 }
 
 function writeCache(key, data, ttlMs = DEFAULT_CACHE_TTL_MS) {
-  if (responseCache.size >= MAX_CACHE_ENTRIES && !responseCache.has(key)) {
+  if (responseCache.size >= MAX_CACHE_ENTRIES_LIMIT && !responseCache.has(key)) {
     const oldestKey = responseCache.keys().next().value
     if (oldestKey) responseCache.delete(oldestKey)
   }
@@ -218,12 +228,16 @@ export const transcribeAudio = (audioBlob, sessionId, language = null) => {
   if (language) {
     form.append('language', language)
   }
+  const rid = _rid()
+  if (rid) {
+    form.append('restaurant_id', String(rid))
+  }
   // Audio processing involves STT model inference + TTS — can take 30-60s on first call
-  return api.post('/voice/process-audio', form, { timeout: 120000 }).then(r => r.data)
+  return api.post('/voice/process-audio', form, { timeout: API_AUDIO_TIMEOUT }).then(r => r.data)
 }
 
 export const submitTextOrder = (text, sessionId) =>
-  post('/voice/process', { text, session_id: sessionId || null })
+  post('/voice/process', { text, session_id: sessionId || null, restaurant_id: _rid() })
 
 export const confirmOrder = (order, kot) =>
   api.post('/voice/confirm-order', { order, kot }, { params: _params() }).then(r => r.data)

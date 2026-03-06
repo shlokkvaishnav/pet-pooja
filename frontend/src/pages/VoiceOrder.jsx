@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { submitTextOrder, transcribeAudio, confirmOrder, getMenuMatrix, getTrends } from '../api/client'
+import useVoiceStream from '../api/useVoiceStream'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
 import KOTTicket from '../components/KOTTicket'
@@ -7,9 +8,19 @@ import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
 import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
 import { buildUpsellCandidates } from '../utils/revenueInsights'
+import { VOICE_AUTO_LISTEN_DELAY_MS } from '../config'
 
 function generateSessionId() {
   return 'sess-' + Math.random().toString(36).slice(2, 10)
+}
+
+function getRestaurantId() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('sizzle_restaurant') || '{}')
+    return saved.restaurant_id || null
+  } catch {
+    return null
+  }
 }
 
 export default function VoiceOrder() {
@@ -29,6 +40,8 @@ export default function VoiceOrder() {
   const recorderRef = useRef(null)
   const autoListenRef = useRef(true)
   const lastIntentRef = useRef(null)
+  const sendInterruptRef = useRef(() => {})
+  const restaurantId = getRestaurantId()
 
   // ── TTS Audio Playback ──
   const playTTSAudio = useCallback((base64Audio) => {
@@ -50,7 +63,7 @@ export default function VoiceOrder() {
       setIsSpeaking(false)
       // Auto-listen: restart recording after TTS finishes (skip after CONFIRM)
       if (autoListenRef.current && lastIntentRef.current !== 'CONFIRM') {
-        setTimeout(() => recorderRef.current?.startRecording(), 600)
+        setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
       }
     }
     audio.onerror = () => {
@@ -68,6 +81,7 @@ export default function VoiceOrder() {
       currentAudioRef.current.src = ''
       setIsSpeaking(false)
     }
+    sendInterruptRef.current()
   }, [])
 
   // ── Process result and show feedback ──
@@ -113,7 +127,36 @@ export default function VoiceOrder() {
     if (intent === 'CONFIRM' && data.session_items?.length > 0) {
       handleVoiceConfirm(data)
     }
-  }, [playTTSAudio])
+  }, [playTTSAudio, autoListenEnabled])
+
+  const {
+    connect,
+    disconnect,
+    sendAudioChunk,
+    sendEnd,
+    sendInterrupt,
+    isConnected,
+    partialTranscript,
+    finalTranscript,
+  } = useVoiceStream({
+    sessionId: sessionId.current,
+    language: selectedLanguage,
+    restaurantId,
+    onPipelineResult: (data) => {
+      setLoading(false)
+      setError(null)
+      processResult(data)
+    },
+    onTTSChunk: (audioB64) => {
+      playTTSAudio(audioB64)
+    },
+    onError: (detail) => {
+      setLoading(false)
+      setError(detail || 'Live voice connection failed')
+    },
+  })
+
+  sendInterruptRef.current = sendInterrupt
 
   const handleTextOrder = async () => {
     if (!textInput.trim()) return
@@ -145,6 +188,16 @@ export default function VoiceOrder() {
     }
     setLoading(false)
   }
+
+  const handleStreamStart = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    return connect()
+  }, [connect])
+
+  const handleStreamEnd = useCallback(() => {
+    sendEnd()
+  }, [sendEnd])
 
   // ── Remove item via UI button ──
   const handleRemoveItem = async (itemName) => {
@@ -227,6 +280,13 @@ export default function VoiceOrder() {
   }, [autoListenEnabled])
 
   useEffect(() => {
+    connect().catch(() => {})
+    return () => {
+      disconnect()
+    }
+  }, [connect, disconnect])
+
+  useEffect(() => {
     let active = true
     Promise.all([
       getMenuMatrix().catch(() => ({ items: [] })),
@@ -258,6 +318,7 @@ export default function VoiceOrder() {
 
   // Effective order for display (use session_order which covers all turns)
   const effectiveOrder = result?.session_order || result?.order
+  const liveTranscript = partialTranscript || finalTranscript || ''
 
   // Determine step: 1=Listen, 2=Review (with continued input)
   const step = result ? 2 : 1
@@ -397,7 +458,71 @@ export default function VoiceOrder() {
                 onStartRecording={handleInterruptAudio}
                 autoListen={autoListenEnabled}
                 onAutoListenSilence={handleAutoListenSilence}
+                onAudioChunk={sendAudioChunk}
+                onStreamStart={handleStreamStart}
+                onStreamEnd={handleStreamEnd}
               />
+              {/* Live transcript indicator while processing */}
+              <AnimatePresence>
+                {loading && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      marginTop: 14, padding: '6px 14px',
+                      borderRadius: 'var(--radius-full)',
+                      background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+                      border: '1px solid color-mix(in srgb, var(--accent) 20%, transparent)',
+                    }}
+                  >
+                    <span style={{
+                      width: 6, height: 6, borderRadius: '50%',
+                      background: 'var(--accent)',
+                      animation: 'pulse 1.2s ease-in-out infinite',
+                    }} />
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      {liveTranscript ? `Heard: "${liveTranscript}"` : 'Listening and processing…'}
+                    </span>
+                    <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <AnimatePresence>
+                {!loading && partialTranscript && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 0.75, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    style={{
+                      marginTop: 10, fontSize: 12, color: 'var(--text-muted)',
+                      fontStyle: 'italic', textAlign: 'center', maxWidth: 320,
+                    }}
+                  >
+                    Listening: "{partialTranscript}"
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              {/* Last transcript preview (visible right after processing) */}
+              <AnimatePresence>
+                {!loading && result?.transcript && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 0.7, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    style={{
+                      marginTop: 10, fontSize: 12, color: 'var(--text-muted)',
+                      fontStyle: 'italic', textAlign: 'center', maxWidth: 280,
+                    }}
+                  >
+                    "{result.transcript}"
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <div style={{ marginTop: 10, fontSize: 11, color: isConnected ? 'var(--success)' : 'var(--text-muted)' }}>
+                {isConnected ? 'Live voice channel ready' : 'Live voice channel reconnecting'}
+              </div>
               {isSpeaking && (
                 <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 20, justifyContent: 'center', marginTop: 12 }}>
                   {[8, 16, 10].map((h, i) => (

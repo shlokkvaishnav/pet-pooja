@@ -1,14 +1,22 @@
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { Mic } from 'lucide-react'
+import {
+  VOICE_VISUALIZER_BARS,
+  VOICE_SPEECH_THRESHOLD,
+  VOICE_SILENCE_TIMEOUT_MS,
+  VOICE_MAX_WAIT_NO_SPEECH_MS,
+  VOICE_MAX_RECORD_MS,
+} from '../config'
 
-const VISUALIZER_BARS = 48
-const SPEECH_THRESHOLD = 12       // avg freq-bin value above this = speech
-const SILENCE_TIMEOUT_MS = 2500   // ms of post-speech silence → auto-stop
-const MAX_WAIT_NO_SPEECH_MS = 6000 // ms with no speech → auto-stop
-const MAX_RECORD_MS = 15000       // hard cap on recording length
+const VISUALIZER_BARS = VOICE_VISUALIZER_BARS
+const SPEECH_THRESHOLD = VOICE_SPEECH_THRESHOLD
+const SILENCE_TIMEOUT_MS = VOICE_SILENCE_TIMEOUT_MS
+const MAX_WAIT_NO_SPEECH_MS = VOICE_MAX_WAIT_NO_SPEECH_MS
+const MAX_RECORD_MS = VOICE_MAX_RECORD_MS
+const CHUNK_INTERVAL_MS = 250
 
 const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
-  const { onRecorded, onStartRecording, autoListen, onAutoListenSilence } = props
+  const { onRecorded, onStartRecording, autoListen, onAutoListenSilence, onAudioChunk, onStreamStart, onStreamEnd } = props
 
   const [state, setState] = useState('idle') // idle | recording | processing
   const mediaRecorderRef = useRef(null)
@@ -23,18 +31,19 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
 
   // Stable refs for props (avoids stale closures in async / RAF callbacks)
   const propsRef = useRef({})
-  propsRef.current = { onRecorded, onStartRecording, autoListen, onAutoListenSilence }
+  propsRef.current = { onRecorded, onStartRecording, autoListen, onAutoListenSilence, onAudioChunk, onStreamStart, onStreamEnd }
 
   // Silence-detection refs
   const silenceStartRef = useRef(null)
   const speechDetectedRef = useRef(false)
   const recordingStartRef = useRef(null)
   const stoppedRef = useRef(false)
+  const streamActiveRef = useRef(false)
 
   const isRecording = state === 'recording'
   const isProcessing = state === 'processing'
 
-  // ── Stable function refs (always latest closure) ──
+  // Stable function refs (always latest closure)
   const fnRef = useRef({})
 
   fnRef.current.stopRecording = () => {
@@ -48,6 +57,13 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
       // Interrupt TTS only on manual click (not auto-listen restart)
       if (interrupt && propsRef.current.onStartRecording) {
         propsRef.current.onStartRecording()
+      }
+
+      streamActiveRef.current = false
+
+      if (propsRef.current.onStreamStart) {
+        const streamReady = await propsRef.current.onStreamStart()
+        streamActiveRef.current = streamReady !== false && !!propsRef.current.onAudioChunk
       }
 
       // Reset silence-detection state
@@ -70,20 +86,33 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
       chunksRef.current = []
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data)
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data)
+          if (streamActiveRef.current && propsRef.current.onAudioChunk) {
+            propsRef.current.onAudioChunk(e.data)
+          }
+        }
       }
 
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-        stream.getTracks().forEach(t => t.stop())
+        stream.getTracks().forEach((t) => t.stop())
         streamRef.current = null
         if (analyserCtxRef.current?.audioCtx) analyserCtxRef.current.audioCtx.close()
         if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
 
-        // Auto-listen mode + no speech detected → skip processing, go idle
         if (propsRef.current.autoListen && !speechDetectedRef.current) {
           setState('idle')
           if (propsRef.current.onAutoListenSilence) propsRef.current.onAutoListenSilence()
+          return
+        }
+
+        if (streamActiveRef.current && propsRef.current.onStreamEnd) {
+          propsRef.current.onStreamEnd()
+        }
+
+        if (streamActiveRef.current) {
+          setState('idle')
           return
         }
 
@@ -95,10 +124,14 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
         }
       }
 
-      recorder.start()
+      if (streamActiveRef.current) {
+        recorder.start(CHUNK_INTERVAL_MS)
+      } else {
+        recorder.start()
+      }
       setState('recording')
 
-      // ── Analysis loop (visualizer + silence detection) ──
+      // Analysis loop (visualizer + silence detection)
       const data = new Uint8Array(analyser.frequencyBinCount)
       const tick = () => {
         if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== 'recording') return
@@ -106,7 +139,6 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
         const sum = data.reduce((a, b) => a + b, 0)
         const avg = sum / data.length
 
-        // Silence detection (only when auto-listen is on)
         if (propsRef.current.autoListen && !stoppedRef.current) {
           const now = Date.now()
           const elapsed = now - (recordingStartRef.current || now)
@@ -115,7 +147,6 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
             speechDetectedRef.current = true
             silenceStartRef.current = null
           } else if (speechDetectedRef.current) {
-            // Had speech, now silent
             if (!silenceStartRef.current) {
               silenceStartRef.current = now
             } else if (now - silenceStartRef.current > SILENCE_TIMEOUT_MS) {
@@ -124,7 +155,6 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
               return
             }
           } else if (elapsed > MAX_WAIT_NO_SPEECH_MS) {
-            // Never heard speech — give up
             stoppedRef.current = true
             fnRef.current.stopRecording()
             return
@@ -146,32 +176,28 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
     }
   }
 
-  // Expose start/stop to parent via ref
   useImperativeHandle(ref, () => ({
     startRecording: () => fnRef.current.startRecording(false),
     stopRecording: () => fnRef.current.stopRecording(),
   }))
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
+      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop())
     }
   }, [])
 
-  // Timer: count seconds while recording
   useEffect(() => {
     let intervalId
     if (isRecording) {
-      intervalId = setInterval(() => setTime(t => t + 1), 1000)
+      intervalId = setInterval(() => setTime((t) => t + 1), 1000)
     } else {
       setTime(0)
     }
     return () => clearInterval(intervalId)
   }, [isRecording])
 
-  // Randomise bars while recording for visual effect
   useEffect(() => {
     let frameId
     if (isRecording) {
@@ -185,7 +211,9 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
     } else {
       setBarHeights(Array.from({ length: VISUALIZER_BARS }, () => 4))
     }
-    return () => { if (frameId) cancelAnimationFrame(frameId) }
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId)
+    }
   }, [isRecording])
 
   const formatTime = (seconds) => {
@@ -199,13 +227,12 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
     if (isRecording) {
       fnRef.current.stopRecording()
     } else {
-      fnRef.current.startRecording(true) // true = interrupt TTS
+      fnRef.current.startRecording(true)
     }
   }
 
   return (
     <div className="ai-voice-wrap">
-      {/* Mic / Stop button */}
       <button
         className={`ai-voice-btn${isRecording ? ' ai-voice-btn--active' : ''}`}
         type="button"
@@ -221,7 +248,6 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
         )}
       </button>
 
-      {/* Timer */}
       <span
         className="ai-voice-timer"
         style={{ opacity: isRecording ? 0.7 : 0.3 }}
@@ -229,7 +255,6 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
         {formatTime(time)}
       </span>
 
-      {/* Visualizer bars */}
       <div className="ai-voice-bars">
         {Array.from({ length: VISUALIZER_BARS }).map((_, i) => (
           <div
@@ -244,13 +269,12 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
         ))}
       </div>
 
-      {/* Status label */}
       <p className="ai-voice-status">
         {isProcessing
-          ? 'Processing…'
+          ? 'Processing...'
           : isRecording
             ? 'Listening...'
-            : autoListen ? 'Speak anytime…' : 'Click to speak'}
+            : autoListen ? 'Speak anytime...' : 'Click to speak'}
       </p>
     </div>
   )
