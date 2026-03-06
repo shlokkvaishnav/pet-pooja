@@ -183,12 +183,9 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    # -- Start background combo training scheduler --
-    try:
-        from modules.revenue.combo_engine import start_combo_scheduler
-        start_combo_scheduler(SessionLocal)
-    except Exception as e:
-        logger.warning(f"Combo scheduler failed to start: {e}")
+    # -- Combo training is now lazy: runs inline on first GET /combos request --
+    # No background scheduler needed — avoids race conditions during hot-reload.
+    logger.info("Combo engine: lazy inline training enabled (no startup scheduler)")
 
     # -- DEFERRED: Heavy ML warmups in a background thread --
     warmup_thread = threading.Thread(

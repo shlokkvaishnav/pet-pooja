@@ -183,9 +183,14 @@ export const getRisks = ({ signal } = {}) =>
 export const getCombos = (forceRetrain = false, discountPct = 10) =>
   getWithCache('/revenue/combos', {
     params: _params({ force_retrain: forceRetrain, discount_pct: discountPct }),
-    ttlMs: SHORT_CACHE_TTL_MS,
-    bypassCache: !!forceRetrain,
+    ttlMs: 0,
+    bypassCache: true,
   })
+
+export const promoteCombo = async (comboId) => {
+  const { data } = await api.post(`/revenue/combos/${comboId}/promote`, null, { params: _params() })
+  return data
+}
 
 export const getPriceRecommendations = ({ signal } = {}) =>
   getWithCache('/revenue/price-recommendations', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })

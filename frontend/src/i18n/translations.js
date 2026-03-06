@@ -167,10 +167,10 @@ const translations = {
         page_combo_total: 'Total Combos Identified',
         page_combo_avg_aov: 'Average AOV Uplift',
         page_combo_active: 'Active / Promoted',
-        page_combo_no_data: 'Unable to compute combos right now. Refresh after new order data is available.',
-        page_combo_promote_tip: 'Promote at least one combo above to highlight it for your staff during order-taking.',
-        page_combo_promote_btn: 'Promote This Combo',
-        page_combo_promoted_btn: 'Promoted',
+        page_combo_no_data: 'No combos found yet. Click Refresh to run the correlation analysis now.',
+        page_combo_promote_tip: "Click 'Add To Menu' on at least one combo above to add it to your Live POS Menu under the \"Combos\" Category.",
+        page_combo_promote_btn: 'Add To Menu',
+        page_combo_promoted_btn: 'Added to Menu',
 
         // Page — Orders
         page_orders_eyebrow: 'Operations',
@@ -364,7 +364,7 @@ const translations = {
         page_combo_total: 'कुल कॉम्बो पहचाने गए',
         page_combo_avg_aov: 'औसत AOV वृद्धि',
         page_combo_active: 'सक्रिय / प्रमोटेड',
-        page_combo_no_data: 'अभी कॉम्बो गणना संभव नहीं है। नए ऑर्डर डेटा के बाद रिफ्रेश करें।',
+        page_combo_no_data: 'अभी कोई कॉम्बो नहीं मिला। विश्लेषण चलाने के लिए रिफ्रेश करें।',
         page_combo_promote_tip: 'ऑर्डर लेते समय अपने स्टाफ के लिए हाइलाइट करने हेतु कम से कम एक कॉम्बो प्रमोट करें।',
         page_combo_promote_btn: 'यह कॉम्बो प्रमोट करें',
         page_combo_promoted_btn: 'प्रमोटेड',
