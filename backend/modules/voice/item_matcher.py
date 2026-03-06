@@ -45,7 +45,9 @@ SKIP_WORDS = {"aur", "and", "or", "ya", "bhi", "with", "dena", "lao",
               # Hinglish fillers
               "miya", "mia", "bhai", "milay", "kiya", "uske", "saath", "bhi",
               "chahiye", "mat", "maat", "nahi", "ek", "do", "teen",
-              "chaar", "paanch", "kuch", "sab", "wala", "wali", "wale",
+              "chaar", "paanch", "chhe", "saat", "aath", "nau", "das",
+              "gyaarah", "barah", "terah", "chaudah", "pandrah",
+              "kuch", "sab", "wala", "wali", "wale",
               "e", "hi", "yeh", "woh", "kya",
               "jara", "zara", "deena", "na", "toh", "bas",
               # Devanagari equivalents (fallback if transliteration missed)
@@ -227,6 +229,16 @@ def validate_aliases(aliases: str | None) -> str:
     if len(result) > _ALIAS_MAX_LENGTH:
         result = result[:_ALIAS_MAX_LENGTH].rsplit("|", 1)[0]
     return result
+
+
+def warmup_semantic_model():
+    """Pre-load the sentence-transformer model at startup so FAISS index build is fast."""
+    logger.info("Warming up semantic model...")
+    _semantic_index._load_model()
+    if _semantic_index._model is not None:
+        logger.info("Semantic model warm")
+    else:
+        logger.warning("Semantic model could not be loaded during warmup")
 
 
 # ---------------------------------------------------------------------------

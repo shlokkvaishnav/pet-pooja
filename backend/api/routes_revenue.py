@@ -21,7 +21,7 @@ from modules.revenue.contribution_margin import calculate_margins
 from modules.revenue.popularity import calculate_popularity
 from modules.revenue.menu_matrix import classify_menu_matrix, get_quadrant_summary
 from modules.revenue.hidden_stars import detect_hidden_stars
-from modules.revenue.combo_engine import generate_combos
+from modules.revenue.combo_engine import generate_combos, fetch_combos_from_db, run_combo_training_background
 from modules.revenue.price_optimizer import generate_price_recommendations
 from modules.revenue.trend_analyzer import (
     calculate_trends,
@@ -48,7 +48,8 @@ _CACHE_TTL = 300  # 5 minutes
 
 def _get_cached(key: str):
     """Return cached value if still valid, else None."""
-    entry = _cache.get(key)
+    with _cache_lock:
+        entry = _cache.get(key)
     if entry and time.time() - entry["ts"] < _CACHE_TTL:
         return entry["data"]
     return None
@@ -110,7 +111,7 @@ def get_dashboard(db: Session = Depends(get_db)):
         items_at_risk = sum(
             1 for m in matrix
             if m.get("quadrant") == "dog" or (
-                m.get("margin_pct", 100) < 40 and m.get("popularity_score", 0) > 50
+                m.get("margin_pct", 100) < 40 and m.get("popularity_score", 0) > 0.5
             )
         )
 
@@ -205,8 +206,8 @@ def get_risk_items(db: Session = Depends(get_db)):
             cm = item.get("margin_pct", 100)
             pop = item.get("popularity_score", 0)
 
-            if cm < 40 and pop > 50:
-                risk_score = round((100 - cm) * (pop / 100), 1)
+            if cm < 40 and pop > 0.5:
+                risk_score = round((100 - cm) * pop, 1)
                 risk_items.append({
                     **item,
                     "risk_score": risk_score,
@@ -227,31 +228,38 @@ def get_risk_items(db: Session = Depends(get_db)):
 @router.get("/combos")
 def get_combo_suggestions(
     db: Session = Depends(get_db),
-    force_retrain: bool = Query(False, description="Force retraining of combo model"),
-    discount_pct: float = Query(10.0, ge=1.0, le=30.0, description="Target discount percentage"),
 ):
     """
     GET /api/revenue/combos
-    Returns: top 20 combos from FP-Growth combo engine.
-    Results are cached in DB. Out-of-stock items are filtered.
-    Pass force_retrain=true to retrain on demand.
+    Returns: top 20 combos from pre-computed FP-Growth results in DB.
+    Training runs in the background on startup and on a schedule.
+    Always fast — never blocks on FP-Growth.
     """
     try:
-        if not force_retrain:
-            cached = _get_cached("combos")
-            if cached:
-                return {"combos": cached}
-
-        combos = generate_combos(
-            db,
-            target_discount_pct=discount_pct,
-            force_retrain=force_retrain,
-        )
-        _set_cached("combos", combos)
+        combos = fetch_combos_from_db(db)
         return {"combos": combos}
     except Exception as e:
-        logger.exception("Error generating combos")
-        raise HTTPException(status_code=500, detail=f"Combo generation failed: {e}")
+        logger.exception("Error fetching combos")
+        raise HTTPException(status_code=500, detail=f"Combo fetch failed: {e}")
+
+
+@router.post("/combos/retrain")
+def retrain_combos(
+    db: Session = Depends(get_db),
+    discount_pct: float = Query(10.0, ge=1.0, le=30.0, description="Target discount percentage"),
+):
+    """
+    POST /api/revenue/combos/retrain
+    Trigger an immediate combo retraining in a background thread.
+    Returns immediately — results appear in GET /combos once training completes.
+    """
+    try:
+        from database import SessionLocal
+        run_combo_training_background(SessionLocal)
+        return {"status": "training_started", "message": "Combo retraining started in background"}
+    except Exception as e:
+        logger.exception("Error triggering combo retrain")
+        raise HTTPException(status_code=500, detail=f"Combo retrain failed: {e}")
 
 
 @router.get("/price-recommendations")

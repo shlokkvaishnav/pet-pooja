@@ -60,8 +60,7 @@ def _find_ffmpeg() -> str:
         "ffmpeg not found. Install it: winget install Gyan.FFmpeg"
     )
 
-# Lazy-loaded model — loaded on first transcribe() call
-# This avoids crashes when testing text-only (no audio needed)
+# Lazy-loaded model — loaded on first transcribe() call or at startup via warmup()
 _model = None
 
 
@@ -91,6 +90,13 @@ def _get_model():
         _model = WhisperModel(_WHISPER_MODEL, device=device, compute_type=compute_type)
         logger.info("Model loaded — runs fully offline from now on")
     return _model
+
+
+def warmup():
+    """Pre-load Whisper model at startup so the first request is fast."""
+    logger.info("Warming up Whisper STT model...")
+    _get_model()
+    logger.info("Whisper STT model warm")
 
 
 def convert_to_wav(input_path: str) -> str:

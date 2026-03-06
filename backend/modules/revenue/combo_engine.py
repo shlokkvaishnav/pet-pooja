@@ -8,7 +8,7 @@ profitable combo suggestions with association rules.
 Supports:
 - Sliding window (last N orders) for trend relevance
 - DB caching via ComboSuggestion table
-- On-demand or nightly retraining (not on every request)
+- Background training at startup + configurable schedule (not on every request)
 - Stock-aware filtering — out-of-stock items excluded
 - Category-aware combo validation (main+side+drink preferred)
 - Configurable discount percentage
@@ -16,6 +16,7 @@ Supports:
 """
 
 import logging
+import os
 import threading
 from collections import Counter
 
@@ -29,6 +30,11 @@ from models import MenuItem, SaleTransaction, ComboSuggestion, Category
 # Thread-safe tracking of training state
 _train_lock = threading.Lock()
 _last_trained_order_count = 0
+_training_in_progress = False
+
+# Background scheduler interval (env-overridable, default: 86400 = 24h)
+_COMBO_RETRAIN_INTERVAL_SEC = int(os.getenv("COMBO_RETRAIN_INTERVAL_SEC", "86400"))
+_scheduler_timer: threading.Timer | None = None
 
 # Category groups for combo validation (Indian restaurant structure)
 _COMBO_CATEGORY_GROUPS = {
@@ -107,6 +113,76 @@ def generate_combos(
 
     # 2. Return cached combos from the database, filtering out-of-stock items
     return _fetch_combos_from_db(db)
+
+
+def fetch_combos_from_db(db: Session) -> list[dict]:
+    """
+    Public read-only accessor: fetch pre-computed combos from the DB.
+    Used by the API endpoint — never triggers training.
+    """
+    return _fetch_combos_from_db(db)
+
+
+def run_combo_training_background(db_session_factory):
+    """
+    Run FP-Growth training in a background thread.
+    Called at startup and on a recurring schedule.
+    db_session_factory: callable that returns a new DB session.
+    """
+    global _training_in_progress
+
+    if _training_in_progress:
+        logger.info("Combo training already in progress — skipping")
+        return
+
+    def _train():
+        global _training_in_progress
+        _training_in_progress = True
+        db = db_session_factory()
+        try:
+            logger.info("Background combo training started")
+            generate_combos(db, force_retrain=True)
+            logger.info("Background combo training completed")
+        except Exception as e:
+            logger.error("Background combo training failed: %s", e)
+        finally:
+            _training_in_progress = False
+            db.close()
+
+    thread = threading.Thread(target=_train, daemon=True, name="combo-trainer")
+    thread.start()
+
+
+def start_combo_scheduler(db_session_factory):
+    """
+    Start a periodic background scheduler that retrains combos.
+    Runs immediately on first call, then every COMBO_RETRAIN_INTERVAL_SEC.
+    """
+    global _scheduler_timer
+
+    def _run_and_reschedule():
+        global _scheduler_timer
+        run_combo_training_background(db_session_factory)
+        _scheduler_timer = threading.Timer(
+            _COMBO_RETRAIN_INTERVAL_SEC, _run_and_reschedule
+        )
+        _scheduler_timer.daemon = True
+        _scheduler_timer.start()
+
+    # Run first training immediately
+    _run_and_reschedule()
+    logger.info(
+        "Combo scheduler started (interval=%ds)", _COMBO_RETRAIN_INTERVAL_SEC
+    )
+
+
+def stop_combo_scheduler():
+    """Cancel the periodic combo scheduler (called on shutdown)."""
+    global _scheduler_timer
+    if _scheduler_timer is not None:
+        _scheduler_timer.cancel()
+        _scheduler_timer = None
+        logger.info("Combo scheduler stopped")
 
 
 # -- ML Pipeline ----------------------------------------------------------

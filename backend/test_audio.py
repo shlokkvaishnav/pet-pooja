@@ -7,11 +7,11 @@ from database import SessionLocal
 from models import MenuItem
 from modules.voice.pipeline import VoicePipeline
 
-audio_path = r"C:\Users\Pranshul Soni\Documents\Projects\pet-pooja\audio\Recording (3).m4a"
+audio_path = r"C:\Users\Pranshul Soni\Documents\Projects\pet-pooja\audio\Recording (6).m4a"
 
 db = SessionLocal()
 items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
-pipeline = VoicePipeline(db_session=db, menu_items=items)
+pipeline = VoicePipeline(menu_items=items)
 
 print(f"Testing audio: {audio_path}")
 print(f"Menu items loaded: {len(items)}")

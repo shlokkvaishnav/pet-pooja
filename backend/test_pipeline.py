@@ -129,7 +129,6 @@ def test_full_pipeline():
 
     # Build pipeline with mock DB data (simulates real DB load)
     pipeline = VoicePipeline(
-        db_session=None,
         menu_items=menu_items,
         combo_rules=[],
         hidden_stars=[],
@@ -210,7 +209,6 @@ def test_error_taxonomy():
     print("=" * 60)
 
     pipeline = VoicePipeline(
-        db_session=None,
         menu_items=menu_items,
         combo_rules=[],
         hidden_stars=[],

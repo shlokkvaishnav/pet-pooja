@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LightRays from '../components/LightRays'
+import { motion } from 'motion/react'
 import { useAuth } from '../context/AuthContext'
 import { useTranslation } from '../context/LanguageContext'
 import './Login.css'
@@ -33,10 +34,17 @@ export default function Login() {
 
     return (
         <div className="login-root">
-            <a href="#" className="login-back-btn" onClick={(e) => { e.preventDefault(); navigate('/'); }}>
+            <motion.a
+                href="#"
+                className="login-back-btn"
+                onClick={(e) => { e.preventDefault(); navigate('/'); }}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.5, delay: 0.3 }}
+            >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="M12 19l-7-7 7-7" /></svg>
                 {t('login_back')}
-            </a>
+            </motion.a>
 
             {/* The interactive LightRays page background */}
             <div style={{ position: 'absolute', inset: 0, zIndex: 1 }}>
@@ -74,14 +82,31 @@ export default function Login() {
                 </div>
             </div>
 
-            <div className="login-glass-card">
+            <motion.div
+                className="login-glass-card"
+                initial={{ opacity: 0, y: 40, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.7, ease: [0.25, 0.46, 0.45, 0.94] }}
+            >
                 {/* ─── LEFT SIDE ─── */}
                 <div className="login-side-left">
-                    <p className="login-left-subtitle">{t('login_left_sub')}</p>
-                    <h2 className="login-left-title">
+                    <motion.p
+                        className="login-left-subtitle"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.5, duration: 0.5 }}
+                    >
+                        {t('login_left_sub')}
+                    </motion.p>
+                    <motion.h2
+                        className="login-left-title"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.7, duration: 0.6 }}
+                    >
                         {t('login_left_title_1')}<br />
                         {t('login_left_title_2')}
-                    </h2>
+                    </motion.h2>
                 </div>
 
                 {/* ─── RIGHT SIDE ─── */}
@@ -101,15 +126,37 @@ export default function Login() {
                     </div>
 
                     {/* Form Area */}
-                    <div className="login-form-area">
-                        <h1>{t('login_signin')}</h1>
+                    <motion.div
+                        className="login-form-area"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.4, duration: 0.5 }}
+                    >
+                        <motion.h1
+                            initial={{ opacity: 0, y: 15 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.5, duration: 0.4 }}
+                        >
+                            {t('login_signin')}
+                        </motion.h1>
 
                         <form onSubmit={handleLogin}>
                             {error && (
-                                <div style={{ color: '#ff6b35', fontSize: '13px', marginBottom: '16px', fontWeight: 600 }}>{error}</div>
+                                <motion.div
+                                    style={{ color: '#ff6b35', fontSize: '13px', marginBottom: '16px', fontWeight: 600 }}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                >
+                                    {error}
+                                </motion.div>
                             )}
 
-                            <div className="login-form-group">
+                            <motion.div
+                                className="login-form-group"
+                                initial={{ opacity: 0, y: 15 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.6, duration: 0.4 }}
+                            >
                                 <input
                                     type="text"
                                     className="login-input"
@@ -118,9 +165,14 @@ export default function Login() {
                                     onChange={(e) => setEmail(e.target.value)}
                                     autoComplete="username"
                                 />
-                            </div>
+                            </motion.div>
 
-                            <div className="login-form-group">
+                            <motion.div
+                                className="login-form-group"
+                                initial={{ opacity: 0, y: 15 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.7, duration: 0.4 }}
+                            >
                                 <input
                                     type={showPassword ? "text" : "password"}
                                     className="login-input"
@@ -141,14 +193,27 @@ export default function Login() {
                                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
                                     )}
                                 </button>
-                            </div>
+                            </motion.div>
 
-                            <a href="#" className="login-forgot-link">{t('login_forgot')}</a>
+                            <motion.a
+                                href="#"
+                                className="login-forgot-link"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                transition={{ delay: 0.8, duration: 0.4 }}
+                            >
+                                {t('login_forgot')}
+                            </motion.a>
 
-                            <button
+                            <motion.button
                                 type="submit"
                                 className="login-submit-btn"
                                 disabled={loading}
+                                initial={{ opacity: 0, y: 15 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.9, duration: 0.4 }}
+                                whileHover={{ scale: 1.02, y: -2 }}
+                                whileTap={{ scale: 0.98 }}
                             >
                                 {loading ? t('login_signing_in') : (
                                     <>
@@ -156,12 +221,17 @@ export default function Login() {
                                         {t('login_submit')}
                                     </>
                                 )}
-                            </button>
+                            </motion.button>
                         </form>
-                    </div>
+                    </motion.div>
 
                     {/* Footer */}
-                    <div className="login-footer-row">
+                    <motion.div
+                        className="login-footer-row"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 1, duration: 0.5 }}
+                    >
                         <div>© 2024-2026 Sizzle Inc.</div>
                         <div className="login-footer-links">
                             <a href="#">Contact Us</a>
@@ -170,9 +240,9 @@ export default function Login() {
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
                             </a>
                         </div>
-                    </div>
+                    </motion.div>
                 </div>
-            </div>
+            </motion.div>
         </div>
     )
 }

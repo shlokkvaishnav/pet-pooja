@@ -6,7 +6,7 @@ from models import MenuItem
 from modules.voice.pipeline import VoicePipeline
 db=SessionLocal()
 items=db.query(MenuItem).filter(MenuItem.is_available==True).all()
-p=VoicePipeline(db_session=db,menu_items=items)
+p=VoicePipeline(menu_items=items)
 tests=[
  "bhaiya do paneer tikka aur ek butter naan dena",
  "do paneer tikka aur ek butter naan dena",

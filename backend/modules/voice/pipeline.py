@@ -51,7 +51,7 @@ except (ImportError, Exception):
 
 
 class VoicePipeline:
-    def __init__(self, db_session, menu_items: list,
+    def __init__(self, menu_items: list,
                  combo_rules: list = None, hidden_stars: list = None):
         """
         Loaded ONCE at app startup.
@@ -60,12 +60,18 @@ class VoicePipeline:
         The search corpus is built from whatever is in the DB.
         Change the menu in DB -> pipeline auto-adapts.
         """
-        self.db = db_session
         self.menu_items = menu_items
         # DYNAMIC: corpus built from DB menu items, not hardcoded
         self.corpus = build_search_corpus(menu_items)
+        self._menu_map = {item.id: item for item in menu_items}
         self.combo_rules = combo_rules or []
         self.hidden_stars = hidden_stars or []
+
+    def refresh_menu(self, menu_items: list, *, corpus: list | None = None):
+        """Refresh menu items and rebuild corpus/map without re-instantiating."""
+        self.menu_items = menu_items
+        self.corpus = corpus or build_search_corpus(menu_items)
+        self._menu_map = {item.id: item for item in menu_items}
 
     def process_text(self, text: str, session_id: str = None) -> dict:
         """Process text input (skips STT). For testing without audio."""
@@ -161,7 +167,7 @@ class VoicePipeline:
         all_enriched_items = []
         intent_actions = []
 
-        menu_map = {item.id: item for item in self.menu_items}
+        menu_map = self._menu_map
 
         for ir in intent_results:
             clause = ir["clause"]
@@ -364,7 +370,7 @@ class VoicePipeline:
 
     def _enrich_with_menu_data(self, matched_items):
         """Adds name, price FROM DB to each matched item."""
-        menu_map = {item.id: item for item in self.menu_items}
+        menu_map = self._menu_map
         enriched = []
         for match in matched_items:
             menu_item = menu_map.get(match["item_id"])
@@ -406,7 +412,7 @@ def process_voice_order(db, audio_path: str = None, text_input: str = None,
     """
     from models import MenuItem
     menu_items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
-    pipeline = VoicePipeline(db_session=db, menu_items=menu_items)
+    pipeline = VoicePipeline(menu_items=menu_items)
 
     if audio_path:
         return pipeline.process_audio(audio_path, session_id=session_id)

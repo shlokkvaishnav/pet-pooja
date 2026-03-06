@@ -41,6 +41,19 @@ async def lifespan(app: FastAPI):
     logger.info("Petpooja AI Copilot — Server ready")
     logger.info("Revenue engine loaded")
 
+    # -- PRE-LOAD: Warm up ML models before the first request arrives --
+    try:
+        from modules.voice.stt import warmup as stt_warmup
+        stt_warmup()
+    except Exception as e:
+        logger.warning(f"Whisper model warmup failed (will lazy-load on first request): {e}")
+
+    try:
+        from modules.voice.item_matcher import warmup_semantic_model
+        warmup_semantic_model()
+    except Exception as e:
+        logger.warning(f"Semantic model warmup failed (will lazy-load on first use): {e}")
+
     # -- DYNAMIC: Load menu from DATABASE --
     db = SessionLocal()
     try:
@@ -53,7 +66,6 @@ async def lifespan(app: FastAPI):
 
         # Build pipeline with DB data -- no hardcoded items
         app.state.voice_pipeline = VoicePipeline(
-            db_session=db,
             menu_items=menu_items,
             combo_rules=[],
             hidden_stars=[],
@@ -64,9 +76,23 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Voice pipeline failed to load: {e}")
         logger.info("Text-only pipeline will still work")
         app.state.voice_pipeline = None
+    finally:
+        db.close()
+
+    # -- Start background combo training scheduler --
+    try:
+        from modules.revenue.combo_engine import start_combo_scheduler
+        start_combo_scheduler(SessionLocal)
+    except Exception as e:
+        logger.warning(f"Combo scheduler failed to start: {e}")
 
     yield
-    db.close()
+    # -- Shutdown: stop combo scheduler --
+    try:
+        from modules.revenue.combo_engine import stop_combo_scheduler
+        stop_combo_scheduler()
+    except Exception:
+        pass
     logger.info("Server shutting down...")
 
 
@@ -134,13 +160,35 @@ def rebuild_faiss_index(db=Depends(get_db)):
     Force-rebuild the FAISS semantic index from current DB menu items.
     Call this after menu item create/update/delete to keep the index current.
     """
+    from models import MenuItem
     from modules.voice.item_matcher import rebuild_index
+
     corpus = rebuild_index(db)
-    # Also update the pipeline's corpus reference
+    menu_items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
+
+    # Also update the pipeline's menu + corpus reference
     pipeline = getattr(app.state, "voice_pipeline", None)
     if pipeline:
-        pipeline.corpus = corpus
-    return {"status": "ok", "corpus_size": len(corpus)}
+        pipeline.refresh_menu(menu_items, corpus=corpus)
+
+    return {"status": "ok", "corpus_size": len(corpus), "menu_items": len(menu_items)}
+
+
+@app.post("/api/voice/reload-menu", tags=["Voice"], dependencies=[Depends(require_auth)])
+def reload_menu(db=Depends(get_db)):
+    """
+    Refresh menu items in the voice pipeline without rebuilding the FAISS index.
+    This updates the fuzzy corpus and in-memory menu references only.
+    """
+    from models import MenuItem
+
+    menu_items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
+    pipeline = getattr(app.state, "voice_pipeline", None)
+    if not pipeline:
+        return {"status": "error", "detail": "Voice pipeline not loaded"}
+
+    pipeline.refresh_menu(menu_items)
+    return {"status": "ok", "menu_items": len(menu_items), "corpus_size": len(pipeline.corpus)}
 
 
 @app.get("/api/health")
@@ -150,7 +198,7 @@ def health():
         "status": "healthy",
         "service": "petpooja-ai-copilot",
         "version": "0.2.0",
-        "pipeline_loaded": hasattr(app.state, "pipeline") and app.state.pipeline is not None,
+        "pipeline_loaded": getattr(app.state, "voice_pipeline", None) is not None,
     }
 
 

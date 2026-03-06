@@ -2,6 +2,11 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect, useRef } from 'react'
 import BlurText from '../components/BlurText'
 import TypewriterText from '../components/TypewriterText'
+import {
+    motion, ScrollReveal, StaggerReveal, AnimatedNumber,
+    fadeInUp, fadeInLeft, fadeInRight, staggerContainer, staggerItem,
+    staggerContainerSlow, scaleIn, popIn, slideInFromLeft, slideInFromRight
+} from '../utils/animations'
 import Navbar from '../components/Navbar'
 import { useTranslation } from '../context/LanguageContext'
 import translations from '../i18n/translations'
@@ -69,16 +74,34 @@ export default function Landing() {
                         />
                     </div>
 
-                    <div className="lp-hero-line" />
+                    <motion.div
+                        className="lp-hero-line"
+                        initial={{ width: 0 }}
+                        animate={titleLoaded ? { width: 80 } : {}}
+                        transition={{ duration: 0.8, delay: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
+                    />
 
-                    <p className="lp-hero-desc">
+                    <motion.p
+                        className="lp-hero-desc"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={titleLoaded ? { opacity: 1, y: 0 } : {}}
+                        transition={{ duration: 0.6, delay: 0.5 }}
+                    >
                         {t('hero_desc')}
-                    </p>
+                    </motion.p>
 
-                    <button className="lp-cta lp-cta-pill" onClick={() => navigate('/login')}>
+                    <motion.button
+                        className="lp-cta lp-cta-pill"
+                        onClick={() => navigate('/login')}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={titleLoaded ? { opacity: 1, y: 0 } : {}}
+                        transition={{ duration: 0.6, delay: 0.7 }}
+                        whileHover={{ scale: 1.04, y: -2 }}
+                        whileTap={{ scale: 0.97 }}
+                    >
                         {t('hero_cta')}
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
-                    </button>
+                    </motion.button>
                 </div>
 
                 {/* Right: image with blur/fade overlay */}

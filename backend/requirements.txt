@@ -43,3 +43,6 @@ PyJWT>=2.8.0
 
 # Utilities
 python-dotenv
+
+# Rate limiting for compute-heavy endpoints
+slowapi>=0.1.9

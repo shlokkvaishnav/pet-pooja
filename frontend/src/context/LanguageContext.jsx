@@ -7,6 +7,7 @@ const LANGUAGES = [
     { code: 'mr', label: 'Marathi', native: 'मराठी' },
     { code: 'kn', label: 'Kannada', native: 'ಕನ್ನಡ' },
     { code: 'gu', label: 'Gujarati', native: 'ગુજરાતી' },
+    { code: 'hi_en', label: 'Hinglish', native: 'Hinglish' },
 ]
 
 const LanguageContext = createContext()
