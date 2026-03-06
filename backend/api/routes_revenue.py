@@ -297,16 +297,19 @@ def get_combo_suggestions(
 ):
     """
     GET /api/revenue/combos
-    Returns: top 20 combos from pre-computed FP-Growth results in DB.
-    Training runs in the background on startup and on a schedule.
-    Always fast — never blocks on FP-Growth.
+    Returns: top 20 combos.
+    If DB is empty or force_retrain=True, runs the correlation pipeline
+    SYNCHRONOUSLY so the response always contains combos.
     """
     try:
-        if force_retrain:
-            # Keep GET endpoint backward compatible while allowing explicit refresh from UI.
-            from database import SessionLocal
-            run_combo_training_background(SessionLocal)
         combos = fetch_combos_from_db(db, restaurant_id=restaurant_id)
+
+        # If empty or force retrain, run pipeline inline (synchronous)
+        if force_retrain or len(combos) == 0:
+            logger.info("Running combo pipeline inline (force=%s, existing=%d)", force_retrain, len(combos))
+            generate_combos(db, force_retrain=True)
+            combos = fetch_combos_from_db(db, restaurant_id=restaurant_id)
+
         return {"combos": combos}
     except Exception as e:
         logger.exception("Error fetching combos")
@@ -328,8 +331,72 @@ def retrain_combos(
         run_combo_training_background(SessionLocal)
         return {"status": "training_started", "message": "Combo retraining started in background"}
     except Exception as e:
-        logger.exception("Error triggering combo retrain")
         raise HTTPException(status_code=500, detail=f"Combo retrain failed: {e}")
+
+
+@router.post("/combos/{combo_id}/promote")
+def promote_combo(
+    combo_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    POST /api/revenue/combos/{combo_id}/promote
+    Converts an AI suggestion into a real MenuItem in the exact database.
+    """
+    from models import ComboSuggestion, Category
+    try:
+        combo = db.query(ComboSuggestion).filter(ComboSuggestion.id == combo_id).first()
+        if not combo:
+            raise HTTPException(status_code=404, detail="Combo suggestion not found")
+
+        # Get or create "Combos" category
+        combo_cat = db.query(Category).filter(
+            Category.restaurant_id == combo.restaurant_id, 
+            func.lower(Category.name) == "combos"
+        ).first()
+
+        if not combo_cat:
+            combo_cat = Category(
+                restaurant_id=combo.restaurant_id,
+                name="Combos",
+                is_active=True
+            )
+            db.add(combo_cat)
+            db.commit()
+            db.refresh(combo_cat)
+
+        food_cost = combo.combo_price - combo.expected_margin
+
+        # Check if already exists
+        existing = db.query(MenuItem).filter(
+            MenuItem.restaurant_id == combo.restaurant_id,
+            MenuItem.name == combo.name
+        ).first()
+
+        if existing:
+            return {"status": "already_promoted", "menu_item_id": existing.id}
+
+        new_item = MenuItem(
+            restaurant_id=combo.restaurant_id,
+            name=combo.name,
+            category_id=combo_cat.id,
+            selling_price=combo.combo_price,
+            food_cost=food_cost,
+            description=f"AI Optimized Combo: {', '.join(combo.item_names)}",
+            is_veg=True, # default true, update via UI if needed
+            is_available=True,
+            tags=["ai-combo", "promoted"]
+        )
+        db.add(new_item)
+        db.commit()
+        db.refresh(new_item)
+
+        return {"status": "success", "menu_item_id": new_item.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error promoting combo")
+        raise HTTPException(status_code=500, detail=f"Failed to promote combo: {e}")
 
 
 @router.get("/price-recommendations")

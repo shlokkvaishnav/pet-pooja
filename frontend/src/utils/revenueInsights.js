@@ -85,6 +85,7 @@ function normalizeCombo(combo, index, menuItems = []) {
     discountPct,
     confidence,
     support,
+    occurrenceCount: num(combo.occurrence_count, 0),
     lift: num(combo.lift, 1.3),
     aovUpliftPct: uplift,
     source: combo.source || 'real',

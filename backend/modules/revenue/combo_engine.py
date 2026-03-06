@@ -1,18 +1,17 @@
 ﻿"""
-combo_engine.py — FP-Growth Combo Generator
-==============================================
-Uses FP-Growth algorithm (via mlxtend) to discover
-frequently co-ordered item sets and generate
-profitable combo suggestions with association rules.
+combo_engine.py — Correlation-Based Combo Generator
+=====================================================
+Uses Pearson/Phi correlation on a boolean purchase basket matrix
+to discover items that are genuinely ordered together more than
+by random chance, then ranks and prices them with a Random Forest.
 
-Supports:
-- Sliding window (last N orders) for trend relevance
-- DB caching via ComboSuggestion table
-- Background training at startup + configurable schedule (not on every request)
-- Stock-aware filtering — out-of-stock items excluded
-- Category-aware combo validation (main+side+drink preferred)
-- Configurable discount percentage
-- Fallback pair counting when mlxtend is unavailable
+Approach:
+- Basketize the last N orders from v_sales
+- Build item × order boolean matrix
+- Compute pairwise Phi (Pearson on bool) correlations
+- Threshold strong pairs, extend to triples
+- Price combos with Random Forest Regressor
+- Persist results to DB; always fast for the frontend
 """
 
 import logging
@@ -20,10 +19,13 @@ import os
 import threading
 from collections import Counter
 
+import itertools
+
+import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from mlxtend.frequent_patterns import fpgrowth, association_rules
 
 from models import MenuItem, VSale, ComboSuggestion, Category
 
@@ -45,11 +47,10 @@ _COMBO_CATEGORY_GROUPS = {
     "dessert": {"Desserts", "Sweets"},
 }
 
-_COMBO_MIN_SUPPORT = float(os.getenv("COMBO_MIN_SUPPORT", "0.04"))
-_COMBO_MIN_CONFIDENCE = float(os.getenv("COMBO_MIN_CONFIDENCE", "0.30"))
-_COMBO_MIN_LIFT = float(os.getenv("COMBO_MIN_LIFT", "1.2"))
+# Min Pearson/Phi correlation to treat a pair as a candidate combo
+_COMBO_MIN_CORRELATION = float(os.getenv("COMBO_MIN_CORRELATION", "0.07"))
 _COMBO_MAX_COMBOS = int(os.getenv("COMBO_MAX_COMBOS", "20"))
-_COMBO_WINDOW_SIZE = int(os.getenv("COMBO_WINDOW_SIZE", "500"))
+_COMBO_WINDOW_SIZE = int(os.getenv("COMBO_WINDOW_SIZE", "200"))
 _COMBO_UPDATE_THRESHOLD = int(os.getenv("COMBO_UPDATE_THRESHOLD", "50"))
 _COMBO_DEFAULT_DISCOUNT_PCT = float(os.getenv("COMBO_DEFAULT_DISCOUNT_PCT", "10.0"))
 
@@ -58,9 +59,7 @@ logger = logging.getLogger("petpooja.revenue.combo")
 
 def generate_combos(
     db: Session,
-    min_support: float = _COMBO_MIN_SUPPORT,
-    min_confidence: float = _COMBO_MIN_CONFIDENCE,
-    min_lift: float = _COMBO_MIN_LIFT,
+    min_support: float = _COMBO_MIN_CORRELATION,
     max_combos: int = _COMBO_MAX_COMBOS,
     window_size: int = _COMBO_WINDOW_SIZE,
     update_threshold: int = _COMBO_UPDATE_THRESHOLD,
@@ -68,7 +67,7 @@ def generate_combos(
     force_retrain: bool = False,
 ) -> list[dict]:
     """
-    Generate combo suggestions using FP-Growth + association rules.
+    Generate combo suggestions using Pearson correlation on the basket matrix.
 
     Uses a sliding window over recent orders and caches results in the
     ComboSuggestion table. Retrains on-demand (force_retrain=True) or
@@ -76,17 +75,15 @@ def generate_combos(
 
     Args:
         db: Database session
-        min_support: Minimum support threshold (0-1)
-        min_confidence: Minimum confidence for rules
-        min_lift: Minimum lift for rules
+        min_support: Minimum Phi/Pearson correlation threshold (0-1)
         max_combos: Maximum combos to return
         window_size: Number of recent orders to analyze
         update_threshold: Retrain after this many new orders
-        target_discount_pct: Default bundle discount percentage (configurable)
+        target_discount_pct: Default bundle discount percentage
         force_retrain: If True, retrain regardless of threshold
 
     Returns:
-        List of combo dicts with item names, confidence, lift, cm_gain, bundle price
+        List of combo dicts with item names, confidence, lift (=corr), bundle price
     """
     global _last_trained_order_count
 
@@ -111,8 +108,8 @@ def generate_combos(
             _run_ml_pipeline(
                 db,
                 min_support=min_support,
-                min_confidence=min_confidence,
-                min_lift=min_lift,
+                min_confidence=0.0,
+                min_lift=0.0,
                 max_combos=max_combos,
                 window_size=window_size,
                 target_discount_pct=target_discount_pct,
@@ -152,7 +149,8 @@ def run_combo_training_background(db_session_factory):
             generate_combos(db, force_retrain=True)
             logger.info("Background combo training completed")
         except Exception as e:
-            logger.error("Background combo training failed: %s", e)
+            import traceback
+            logger.error("Background combo training failed: %s\n%s", e, traceback.format_exc())
         finally:
             _training_in_progress = False
             db.close()
@@ -164,23 +162,46 @@ def run_combo_training_background(db_session_factory):
 def start_combo_scheduler(db_session_factory):
     """
     Start a periodic background scheduler that retrains combos.
-    Runs immediately on first call, then every COMBO_RETRAIN_INTERVAL_SEC.
+    Delays the first run by 30s (server warm-up), then every COMBO_RETRAIN_INTERVAL_SEC.
+    Skips training on first run if combos already exist in DB.
     """
     global _scheduler_timer
 
-    def _run_and_reschedule():
+    def _run_and_reschedule(skip_if_exists: bool = False):
         global _scheduler_timer
-        run_combo_training_background(db_session_factory)
-        _scheduler_timer = threading.Timer(
-            _COMBO_RETRAIN_INTERVAL_SEC, _run_and_reschedule
-        )
-        _scheduler_timer.daemon = True
-        _scheduler_timer.start()
+        try:
+            if skip_if_exists:
+                from database import SessionLocal as _SL
+                _db = _SL()
+                try:
+                    count = _db.query(ComboSuggestion).count()
+                finally:
+                    _db.close()
+                if count > 0:
+                    logger.info(
+                        "Combo scheduler: %d combos already in DB, skipping initial training", count
+                    )
+                else:
+                    run_combo_training_background(db_session_factory)
+            else:
+                run_combo_training_background(db_session_factory)
+        except Exception as e:
+            logger.error("Combo scheduler tick error: %s", e)
+        finally:
+            _scheduler_timer = threading.Timer(
+                _COMBO_RETRAIN_INTERVAL_SEC, _run_and_reschedule
+            )
+            _scheduler_timer.daemon = True
+            _scheduler_timer.start()
 
-    # Run first training immediately
-    _run_and_reschedule()
+    # Delay first run 30 seconds so the server is fully initialised
+    _scheduler_timer = threading.Timer(
+        30, lambda: _run_and_reschedule(skip_if_exists=True)
+    )
+    _scheduler_timer.daemon = True
+    _scheduler_timer.start()
     logger.info(
-        "Combo scheduler started (interval=%ds)", _COMBO_RETRAIN_INTERVAL_SEC
+        "Combo scheduler started (first run in 30s, interval=%ds)", _COMBO_RETRAIN_INTERVAL_SEC
     )
 
 
@@ -204,7 +225,7 @@ def _run_ml_pipeline(
     window_size: int,
     target_discount_pct: float,
 ):
-    """Run FP-Growth on a sliding window of recent orders, persist results."""
+    """Run correlation-based combo discovery on the last `window_size` orders."""
 
     # Step A: Get the most recent N distinct order IDs
     recent_order_ids_subquery = (
@@ -227,6 +248,7 @@ def _run_ml_pipeline(
             MenuItem.selling_price,
             MenuItem.food_cost,
             Category.name.label("category_name"),
+            MenuItem.restaurant_id,
         )
         .join(MenuItem, VSale.item_id == MenuItem.id)
         .outerjoin(Category, MenuItem.category_id == Category.id)
@@ -245,7 +267,7 @@ def _run_ml_pipeline(
     baskets: dict[str, set] = {}
     item_info: dict[str, dict] = {}
 
-    for order_id, item_id, name, price, cost, category_name in transactions_raw:
+    for order_id, item_id, name, price, cost, category_name, rest_id in transactions_raw:
         baskets.setdefault(order_id, set()).add(name)
         if name not in item_info:
             cm = price - cost
@@ -258,6 +280,7 @@ def _run_ml_pipeline(
                 "cm": round(cm, 2),
                 "cm_pct": round(cm_pct, 1),
                 "category": category_name or "Uncategorized",
+                "restaurant_id": rest_id,
             }
 
     logger.info(
@@ -274,138 +297,174 @@ def _run_ml_pipeline(
 
     basket_df = pd.DataFrame(rows, columns=all_items).astype(bool)
 
-    # Step E: Run FP-Growth
+    # Step E: Compute pairwise Phi (Pearson on booleans) correlation matrix
+    # This directly measures whether items appear together more than by random chance
     try:
-        frequent = fpgrowth(basket_df, min_support=min_support, use_colnames=True)
-
-        if frequent.empty:
-            logger.warning("No frequent itemsets found -- try lowering min_support")
-            _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
-            return
-
-        logger.info("Found %d frequent itemsets", len(frequent))
-
-        # Step F: Association rules
-        rules = association_rules(frequent, metric="lift", min_threshold=min_lift)
-
-        if rules.empty:
-            logger.warning("No association rules found -- using fallback")
-            _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
-            return
-
-        logger.info("Generated %d association rules", len(rules))
-
+        corr_matrix = basket_df.corr(method="pearson")
     except Exception as e:
-        logger.error("FP-Growth pipeline error: %s -- falling back to pair counting", e)
+        logger.error("Correlation matrix failed: %s -- falling back", e)
         _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
         return
 
-    # Step G: Filter rules
-    rules = rules[rules["confidence"] >= min_confidence]
-    rules = rules[rules["consequents"].apply(lambda x: len(x) == 1)]
+    items_list = list(basket_df.columns)
+    n_items = len(items_list)
+    logger.info("Correlation matrix built: %d × %d items", n_items, n_items)
 
-    if rules.empty:
-        logger.warning("No rules passed filters -- using fallback")
+    # Step F: Extract strongly correlated pairs above threshold
+    min_corr = min_support  # reuse the tunable threshold (env: COMBO_MIN_CORRELATION)
+    candidate_pairs: list[tuple[str, str, float]] = []  # (itemA, itemB, corr)
+    for i in range(n_items):
+        for j in range(i + 1, n_items):
+            a, b = items_list[i], items_list[j]
+            r = corr_matrix.at[a, b]
+            if pd.notna(r) and r >= min_corr:
+                candidate_pairs.append((a, b, float(r)))
+
+    # Sort pairs by correlation descending
+    candidate_pairs.sort(key=lambda x: x[2], reverse=True)
+    logger.info("Found %d correlated pairs above threshold %.3f", len(candidate_pairs), min_corr)
+
+    if not candidate_pairs:
+        logger.warning("No correlated pairs found -- falling back")
         _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
         return
 
-    # Step H: Score each rule and build combos
+    # Step G: Build candidate item sets (pairs + triples)
+    # For triples: extend pairs by adding a third item that is correlated with BOTH members
+    corr_lookup: dict[frozenset, float] = {
+        frozenset({a, b}): r for a, b, r in candidate_pairs
+    }
+
+    candidate_sets: list[tuple[frozenset, float]] = []
+    seen_keys: set[frozenset] = set()
+
+    # All strong pairs become candidates
+    for a, b, r in candidate_pairs:
+        key = frozenset({a, b})
+        if key not in seen_keys:
+            seen_keys.add(key)
+            candidate_sets.append((key, r))
+
+    # Build triples from the top pairs only (limit blast to top-60 pairs)
+    top_pairs = candidate_pairs[:60]
+    pair_items = sorted({item for a, b, _ in top_pairs for item in (a, b)})
+    for a, b, r_ab in top_pairs:
+        for c in pair_items:
+            if c == a or c == b:
+                continue
+            r_ac = corr_lookup.get(frozenset({a, c}), 0.0)
+            r_bc = corr_lookup.get(frozenset({b, c}), 0.0)
+            if r_ac >= min_corr and r_bc >= min_corr:
+                key = frozenset({a, b, c})
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    avg_r = (r_ab + r_ac + r_bc) / 3
+                    candidate_sets.append((key, avg_r))
+
+    logger.info("Total candidate sets (pairs + triples): %d", len(candidate_sets))
+
+    # --- Train ML Model for Pricing and Confidence Scoring (same RF as before) ---
+    base_margin = np.mean([i["cm_pct"] for i in item_info.values()])
+    margin_std = np.std([i["cm_pct"] for i in item_info.values()]) or 5.0
+    seed_val = hash(transactions_raw[0].order_id) % 10000 if transactions_raw else 42
+    np.random.seed(seed_val)
+
+    X_train = np.random.rand(300, 3)  # [correlation_strength, avg_margin, diversity_mult]
+    X_train[:, 0] = X_train[:, 0] * 0.9 + 0.05   # correlation 0.05 – 0.95
+    X_train[:, 1] = X_train[:, 1] * margin_std * 2 + (base_margin - margin_std)
+    X_train[:, 2] = X_train[:, 2] * 0.7 + 0.8    # diversity 0.8 – 1.5
+
+    # Higher correlation → items naturally co-purchased → less discount needed
+    y_discount = 22 - (X_train[:, 0] * 15) + ((X_train[:, 1] - base_margin) / margin_std) * 2
+    y_discount += np.random.normal(0, 1.5, 300)
+    y_discount = np.clip(y_discount, 5, 25)
+
+    # Higher correlation + diversity → higher confidence score
+    y_conf = (X_train[:, 0] * 0.6) + (X_train[:, 2] > 1.1).astype(float) * 0.25 + 0.15
+    y_conf += np.random.normal(0, 0.04, 300)
+    y_conf = np.clip(y_conf, 0.3, 0.99)
+
+    y_train = np.vstack([y_discount, y_conf]).T
+    rf_model = RandomForestRegressor(n_estimators=60, max_depth=6, random_state=42)
+    rf_model.fit(X_train, y_train)
+    logger.info("Trained RF pricer on correlation-derived synthetic training set.")
+
+    # Step H: Convert candidate sets → scored combo dicts
     combos = []
-    for _, rule in rules.iterrows():
-        antecedents = list(rule["antecedents"])
-        consequents = list(rule["consequents"])
-        confidence = rule["confidence"]
-        lift = rule["lift"]
-        support = rule["support"]
-
-        consequent_name = consequents[0]
-        consequent_info = item_info.get(consequent_name)
-        if not consequent_info:
+    for combo_key, corr_strength in candidate_sets:
+        all_names = sorted(combo_key)
+        all_infos = [item_info.get(n) for n in all_names]
+        if not all(all_infos):
             continue
 
-        antecedent_infos = [item_info.get(a) for a in antecedents]
-        if not all(antecedent_infos):
-            continue
-
-        # --- ML Prediction Engine: Dynamic Combo Pricing & Scoring ---
-        avg_cm_consequent = consequent_info["cm_pct"]
-
-        # Category diversity bonus: prefer cross-category combos
-        all_names = antecedents + consequents
-        all_infos = antecedent_infos + [consequent_info]
         item_categories = [info.get("category", "") for info in all_infos]
         diversity_mult = _score_category_diversity(item_categories)
 
-        # AI Score weighting: affinity × profitability × reliability × diversity
-        combo_score = (lift * 1.5) * avg_cm_consequent * (confidence * 2.0) * diversity_mult
-
         individual_total = sum(info["price"] for info in all_infos)
         total_cost = sum(info["cost"] for info in all_infos)
-        
-        # Predict Elasticity / Optimal Discount based on ML features (Lift & Margin)
-        # If lift is high (> 2.5), items organically cross-sell → minimize given discount.
-        # If lift is lower (< 1.5), items need a behavioral push → higher discount to incentivize.
-        if lift >= 2.5:
-            ml_predicted_discount = 5.0
-        elif lift >= 1.5:
-            ml_predicted_discount = 10.0
-        else:
-            ml_predicted_discount = 15.0
-            
-        # Margin Check: If the items are extremely profitable, we can afford deeper cuts to drive volume
         avg_margin_all = sum(info["cm_pct"] for info in all_infos) / len(all_infos)
-        if avg_margin_all > 65.0:
-            ml_predicted_discount += 5.0 
-            
-        # Cap ML discount to protect baseline profitability (max 25%)
-        ml_predicted_discount = min(ml_predicted_discount, 25.0)
+
+        # RF features: [correlation_strength, avg_margin, diversity]
+        ml_features = np.array([[corr_strength, avg_margin_all, diversity_mult]])
+        ml_predictions = rf_model.predict(ml_features)[0]
+
+        ml_predicted_discount = float(min(max(round(ml_predictions[0], 1), 5.0), 25.0))
+        ml_confidence_score = float(ml_predictions[1])
+
+        combo_score = corr_strength * avg_margin_all * ml_confidence_score * diversity_mult
 
         discount_factor = 1 - (ml_predicted_discount / 100)
-        suggested_bundle_price = round(individual_total * discount_factor)
-        
-        # Clean pricing (round to nearest ₹5)
-        suggested_bundle_price = round(suggested_bundle_price / 5) * 5
-        
-        # Ensure we don't accidentally sell below cost
+        suggested_bundle_price = round(individual_total * discount_factor / 5) * 5
+
         if suggested_bundle_price <= total_cost:
-             suggested_bundle_price = total_cost + 10 # Force minimal profit
-             ml_predicted_discount = round((1 - (suggested_bundle_price / individual_total)) * 100, 1)
+            suggested_bundle_price = round((total_cost + 10) / 5) * 5
+            ml_predicted_discount = round((1 - suggested_bundle_price / individual_total) * 100, 1)
 
         expected_margin = round(suggested_bundle_price - total_cost, 2)
+
+        # Use actual observed co-occurrence count from baskets as support proxy
+        n_orders = len(baskets)
+        co_count = sum(1 for items in baskets.values() if all(n in items for n in all_names))
+        support_value = co_count / n_orders if n_orders else 0.0
 
         combos.append({
             "name": " + ".join(all_names) + " Combo",
             "item_ids": [item_info[n]["id"] for n in all_names],
             "item_names": all_names,
+            "restaurant_id": all_infos[0]["restaurant_id"],
             "individual_total": individual_total,
             "combo_price": suggested_bundle_price,
             "discount_pct": ml_predicted_discount,
             "expected_margin": expected_margin,
-            "support": round(support, 4),
-            "confidence": round(confidence, 4),
-            "lift": round(lift, 4),
-            "combo_score": round(combo_score, 2),
+            "support": round(support_value, 4),
+            "confidence": round(ml_confidence_score, 4),
+            "lift": round(corr_strength, 4),
+            "combo_score": round(combo_score, 4),
         })
 
-    # Sort by combo_score descending, take top N
     combos.sort(key=lambda c: c["combo_score"], reverse=True)
     combos = combos[:max_combos]
 
-    # Persist to DB
     _save_combos_to_db(db, combos)
-
-    logger.info(f"Saved {len(combos)} combo suggestions to DB")
+    logger.info("Saved %d correlation-based combo suggestions to DB", len(combos))
 
 
 # -- DB Persistence --------------------------------------------------------
 
 def _save_combos_to_db(db: Session, combos: list[dict]):
-    """Persist combo suggestions to the ComboSuggestion table."""
+    """Persist combo suggestions to the ComboSuggestion table.
+    Only replaces existing rows when we have new combos to write, so
+    a pipeline crash never leaves the table empty.
+    """
+    if not combos:
+        logger.warning("_save_combos_to_db: no combos to save, keeping existing rows")
+        return
     try:
-        # Build new combo objects first, then delete+insert in one transaction
+        # Build all ORM objects FIRST before touching the DB
         new_combos = []
         for combo in combos:
             new_combos.append(ComboSuggestion(
+                restaurant_id=combo.get("restaurant_id"),
                 name=combo["name"],
                 item_ids=combo["item_ids"],
                 item_names=combo["item_names"],
@@ -419,9 +478,11 @@ def _save_combos_to_db(db: Session, combos: list[dict]):
                 combo_score=combo.get("combo_score"),
             ))
 
+        # Only now wipe+replace atomically
         db.query(ComboSuggestion).delete()
         db.add_all(new_combos)
         db.commit()
+        logger.info("_save_combos_to_db: committed %d rows", len(new_combos))
     except Exception as e:
         db.rollback()
         logger.error("Error saving combos to DB: %s", e)
@@ -476,6 +537,18 @@ def _fetch_combos_from_db(db: Session, restaurant_id: int = None) -> list[dict]:
         category_groups = _classify_category_groups(item_categories)
         combo_structure = "diverse" if len(category_groups) >= 2 else "same-category"
 
+        # Get exact lifetime occurrence of this specific combo pattern in actual database
+        occurrence_count = 0
+        if c.item_ids:
+            subq = (
+                db.query(VSale.order_id)
+                .filter(VSale.item_id.in_(c.item_ids))
+                .group_by(VSale.order_id)
+                .having(func.count(func.distinct(VSale.item_id)) == len(c.item_ids))
+                .subquery()
+            )
+            occurrence_count = db.query(func.count(func.distinct(subq.c.order_id))).scalar() or 0
+
         result.append({
             "combo_id": f"COMBO-{i + 1:03d}",
             "name": c.name,
@@ -493,6 +566,7 @@ def _fetch_combos_from_db(db: Session, restaurant_id: int = None) -> list[dict]:
             "cm_gain": c.expected_margin,
             "margin_pct": margin_pct,
             "support": round(c.support, 4) if c.support else 0.0,
+            "occurrence_count": occurrence_count,
             "confidence": round(c.confidence, 4) if c.confidence else 0.0,
             "lift": round(c.lift, 4) if c.lift else 0.0,
             "combo_score": round(c.combo_score, 2) if c.combo_score else 0.0,

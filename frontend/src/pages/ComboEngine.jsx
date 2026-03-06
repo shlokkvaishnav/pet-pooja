@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { motion } from 'motion/react'
-import { getCombos, getDashboardMetrics, getMenuMatrix } from '../api/client'
+import { getCombos, getDashboardMetrics, getMenuMatrix, promoteCombo as promoteComboApi } from '../api/client'
 import { formatPct, formatRupees } from '../utils/format'
 import { buildComboInsights } from '../utils/revenueInsights'
 
@@ -23,40 +23,40 @@ function ComboSkeleton() {
 
 export default function ComboEngine() {
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [combosRaw, setCombosRaw] = useState([])
   const [menuItems, setMenuItems] = useState([])
   const [totalOrders, setTotalOrders] = useState(0)
   const [promotedIds, setPromotedIds] = useState([])
   const [error, setError] = useState(null)
 
-  useEffect(() => {
-    let active = true
-    setLoading(true)
+  const loadCombos = useCallback((forceRetrain = false) => {
     setError(null)
+    if (forceRetrain) setRefreshing(true)
+    else setLoading(true)
 
     Promise.all([
-      getCombos(),
+      getCombos(forceRetrain),
       getMenuMatrix(),
       getDashboardMetrics(),
     ])
       .then(([comboData, matrixData, dashboard]) => {
-        if (!active) return
         setCombosRaw(comboData?.combos || comboData || [])
         setMenuItems(matrixData?.items || [])
         setTotalOrders(dashboard?.total_orders || 0)
       })
       .catch((err) => {
-        if (!active) return
         setError(err?.detail || 'Failed to load combo insights')
       })
       .finally(() => {
-        if (active) setLoading(false)
+        setLoading(false)
+        setRefreshing(false)
       })
-
-    return () => {
-      active = false
-    }
   }, [])
+
+  useEffect(() => {
+    loadCombos()
+  }, [loadCombos])
 
   const insights = useMemo(() => buildComboInsights({
     combos: combosRaw,
@@ -65,8 +65,14 @@ export default function ComboEngine() {
     promotedIds,
   }), [combosRaw, menuItems, totalOrders, promotedIds])
 
-  const promoteCombo = (id) => {
-    setPromotedIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+  const handlePromoteCombo = async (id, comboName) => {
+    try {
+      await promoteComboApi(id)
+      setPromotedIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+      alert(`Successfully promoted: ${comboName}. It is now added to the actual menu in the database!`)
+    } catch (err) {
+      alert(`Failed to promote combo. ${err?.response?.data?.detail || err.message}`)
+    }
   }
 
   if (loading) {
@@ -100,6 +106,14 @@ export default function ComboEngine() {
           <h1 className="app-hero-title">Combo Engine</h1>
           <p className="app-hero-sub">AI-generated bundles to increase average order value and margin contribution.</p>
         </div>
+        <button
+          className="btn btn-secondary"
+          onClick={() => loadCombos(true)}
+          disabled={refreshing}
+          style={{ whiteSpace: 'nowrap', alignSelf: 'center' }}
+        >
+          {refreshing ? 'Retraining…' : '⟳ Refresh Combos'}
+        </button>
       </div>
 
       {insights.insufficientData && (
@@ -127,8 +141,11 @@ export default function ComboEngine() {
         <h2 style={{ marginBottom: 'var(--space-3)' }}>Recommended Combos</h2>
         {!hasCombos ? (
           <div className="card">
-            <div className="card-body">
-              Unable to compute combos right now. Refresh after new order data is available.
+            <div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <span>No combos found yet. Click Refresh to run the correlation analysis now.</span>
+              <button className="btn btn-primary" onClick={() => loadCombos(true)} disabled={refreshing} style={{ whiteSpace: 'nowrap' }}>
+                {refreshing ? 'Running…' : '⟳ Run Now'}
+              </button>
             </div>
           </div>
         ) : (
@@ -136,7 +153,12 @@ export default function ComboEngine() {
             {insights.combos.map((combo) => (
               <div key={combo.id} className="card">
                 <div className="card-body">
-                  <div style={{ fontWeight: 700, marginBottom: 8 }}>{combo.itemNames.join(' + ')}</div>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                    {combo.itemNames.join(' + ')}
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: 6 }}>
+                      (Ordered together {combo.occurrenceCount} times)
+                    </span>
+                  </div>
                   <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 10 }}>
                     {combo.itemNames.map((name, idx) => `${name} (${formatRupees(combo.itemPrices[idx] || 0)})`).join('  |  ')}
                   </div>
@@ -147,15 +169,15 @@ export default function ComboEngine() {
                     <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Est. AOV Uplift</div><div style={{ fontWeight: 700, color: 'var(--accent)' }}>+{formatPct(combo.aovUpliftPct)}</div></div>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-                    Confidence: <strong>{formatPct(combo.confidence * 100)}</strong> based on order co-occurrence frequency.
+                    Confidence: <strong>{formatPct(combo.confidence * 100)}</strong>
                   </div>
                   <button
                     className={combo.isPromoted ? 'btn btn-secondary' : 'btn btn-primary'}
-                    onClick={() => promoteCombo(combo.id)}
+                    onClick={() => handlePromoteCombo(combo.id, combo.itemNames.join(' + '))}
                     disabled={combo.isPromoted}
                     style={{ width: '100%' }}
                   >
-                    {combo.isPromoted ? 'Promoted' : 'Promote This Combo'}
+                    {combo.isPromoted ? 'Added to Menu' : 'Add To Menu'}
                   </button>
                 </div>
               </div>
@@ -165,17 +187,17 @@ export default function ComboEngine() {
       </section>
 
       <section>
-        <h2 style={{ marginBottom: 'var(--space-3)' }}>Promoted Combos</h2>
+        <h2 style={{ marginBottom: 'var(--space-3)' }}>Added Combos</h2>
         {insights.promotedIds.length === 0 ? (
           <div className="card">
             <div className="card-body">
-              Promote at least one combo above to highlight it for your staff during order-taking.
+              Click 'Add To Menu' on at least one combo above to add it to your Live POS Menu under the "Combos" Category.
             </div>
           </div>
         ) : (
           <div className="card">
             <div className="card-body">
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>Currently promoted combos:</div>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Currently Added Combos:</div>
               <ul style={{ margin: 0, paddingLeft: 20 }}>
                 {insights.combos.filter((c) => c.isPromoted).map((combo) => (
                   <li key={combo.id} style={{ marginBottom: 4 }}>
