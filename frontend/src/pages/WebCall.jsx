@@ -5,6 +5,7 @@ import { confirmOrder, speakText, submitTextOrder } from '../api/client'
 import useVoiceStream from '../api/useVoiceStream'
 import VoiceRecorder from '../components/VoiceRecorder'
 import OrderSummary from '../components/OrderSummary'
+import { playAudioWithFallback, stopBrowserSpeech } from '../utils/ttsPlayback'
 import { VOICE_AUTO_LISTEN_DELAY_MS } from '../config'
 
 function generateSessionId() {
@@ -116,41 +117,41 @@ export default function WebCall() {
     })
   }, [])
 
-  const playTTSAudio = useCallback((base64Audio) => {
-    if (!base64Audio) return
+  const playVoiceResponse = useCallback((base64Audio, spokenText = null, language = null) => {
+    const resolvedLanguage = language || (selectedLanguage !== 'auto' ? selectedLanguage : 'en')
 
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
       currentAudioRef.current.src = ''
+      currentAudioRef.current = null
     }
 
-    const bytes = Uint8Array.from(atob(base64Audio), (char) => char.charCodeAt(0))
-    const blob = new Blob([bytes], { type: 'audio/mp3' })
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    currentAudioRef.current = audio
-
-    audio.onended = () => {
-      URL.revokeObjectURL(url)
-      setIsSpeaking(false)
-      if (callActiveRef.current && !micPausedRef.current && lastIntentRef.current !== 'CONFIRM') {
-        setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
-      }
-    }
-    audio.onerror = () => {
-      URL.revokeObjectURL(url)
-      setIsSpeaking(false)
-    }
-
-    setIsSpeaking(true)
-    setStatus('speaking')
-    audio.play().catch(() => setIsSpeaking(false))
-  }, [])
+    playAudioWithFallback({
+      base64Audio,
+      text: spokenText,
+      language: resolvedLanguage,
+      currentAudioRef,
+      onStart: () => {
+        setIsSpeaking(true)
+        setStatus('speaking')
+      },
+      onEnd: () => {
+        setIsSpeaking(false)
+        if (callActiveRef.current && !micPausedRef.current && lastIntentRef.current !== 'CONFIRM') {
+          setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
+        }
+      },
+      onError: () => setIsSpeaking(false),
+    })
+  }, [selectedLanguage])
 
   const stopAudio = useCallback(() => {
-    if (!currentAudioRef.current) return
-    currentAudioRef.current.pause()
-    currentAudioRef.current.src = ''
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause()
+      currentAudioRef.current.src = ''
+      currentAudioRef.current = null
+    }
+    stopBrowserSpeech()
     setIsSpeaking(false)
   }, [])
 
@@ -174,13 +175,11 @@ export default function WebCall() {
     appendMessage('agent', text, language)
     try {
       const tts = await speakText(text, language)
-      if (tts?.audio_b64) {
-        playTTSAudio(tts.audio_b64)
-      }
+      playVoiceResponse(tts?.audio_b64, tts?.text || text, language)
     } catch {
-      // Keep the transcript even if TTS is unavailable.
+      playVoiceResponse(null, text, language)
     }
-  }, [appendMessage, playTTSAudio])
+  }, [appendMessage, playVoiceResponse])
 
   const {
     connect,
@@ -214,7 +213,7 @@ export default function WebCall() {
       if (payload?.spoken_text) {
         appendMessage('agent', payload.spoken_text, payload.language || activeLanguage)
       }
-      playTTSAudio(audioB64)
+      playVoiceResponse(audioB64, payload?.spoken_text, payload?.language || activeLanguage)
     },
     onError: (detail) => {
       setError(detail || 'Call connection failed')
@@ -330,13 +329,17 @@ export default function WebCall() {
       if (data.tts_text) {
         appendMessage('agent', data.tts_text, data.tts_language || data.detected_language || activeLanguage)
       }
-      if (data.tts_audio_b64) {
-        playTTSAudio(data.tts_audio_b64)
+      if (data.tts_audio_b64 || data.tts_text) {
+        playVoiceResponse(
+          data.tts_audio_b64,
+          data.tts_text,
+          data.tts_language || data.detected_language || activeLanguage,
+        )
       }
     } catch (err) {
       setError(err.response?.data?.detail || err.detail || 'Could not send the fallback text')
     }
-  }, [activeLanguage, appendMessage, manualText, playTTSAudio])
+  }, [activeLanguage, appendMessage, manualText, playVoiceResponse])
 
   useEffect(() => {
     let intervalId

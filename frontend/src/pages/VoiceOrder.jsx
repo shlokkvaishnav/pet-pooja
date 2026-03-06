@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
 import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
 import { buildUpsellCandidates } from '../utils/revenueInsights'
+import { playAudioWithFallback, stopBrowserSpeech } from '../utils/ttsPlayback'
 import { VOICE_AUTO_LISTEN_DELAY_MS } from '../config'
 
 function generateSessionId() {
@@ -70,34 +71,27 @@ export default function VoiceOrder() {
   const restaurantId = getRestaurantId()
 
   // ── TTS Audio Playback ──
-  const playTTSAudio = useCallback((base64Audio) => {
-    if (!base64Audio) return
-
+  const playVoiceResponse = useCallback((base64Audio, spokenText = null, language = 'en') => {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
       currentAudioRef.current.src = ''
+      currentAudioRef.current = null
     }
 
-    const bytes = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0))
-    const blob = new Blob([bytes], { type: 'audio/mp3' })
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    currentAudioRef.current = audio
-
-    audio.onended = () => {
-      URL.revokeObjectURL(url)
-      setIsSpeaking(false)
-      // Auto-listen: restart recording after TTS finishes (skip after CONFIRM)
-      if (autoListenRef.current && lastIntentRef.current !== 'CONFIRM') {
-        setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
-      }
-    }
-    audio.onerror = () => {
-      URL.revokeObjectURL(url)
-      setIsSpeaking(false)
-    }
-    setIsSpeaking(true)
-    audio.play().catch(() => setIsSpeaking(false))
+    playAudioWithFallback({
+      base64Audio,
+      text: spokenText,
+      language,
+      currentAudioRef,
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => {
+        setIsSpeaking(false)
+        if (autoListenRef.current && lastIntentRef.current !== 'CONFIRM') {
+          setTimeout(() => recorderRef.current?.startRecording(), VOICE_AUTO_LISTEN_DELAY_MS)
+        }
+      },
+      onError: () => setIsSpeaking(false),
+    })
   }, [])
 
   // ── Stop TTS when user starts recording ──
@@ -105,8 +99,10 @@ export default function VoiceOrder() {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
       currentAudioRef.current.src = ''
-      setIsSpeaking(false)
+      currentAudioRef.current = null
     }
+    stopBrowserSpeech()
+    setIsSpeaking(false)
     sendInterruptRef.current()
   }, [])
 
@@ -148,13 +144,19 @@ export default function VoiceOrder() {
     }
 
     // Auto-play TTS response
-    if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
+    if (data.tts_audio_b64 || data.tts_text) {
+      playVoiceResponse(
+        data.tts_audio_b64,
+        data.tts_text,
+        data.tts_language || data.detected_language || (selectedLanguage !== 'auto' ? selectedLanguage : 'en'),
+      )
+    }
 
     // Auto-confirm if voice said "confirm" and cart has items
     if (intent === 'CONFIRM' && data.session_items?.length > 0) {
       handleVoiceConfirm(data)
     }
-  }, [playTTSAudio, autoListenEnabled])
+  }, [playVoiceResponse, autoListenEnabled, selectedLanguage])
 
   const {
     connect,
@@ -174,8 +176,12 @@ export default function VoiceOrder() {
       setError(null)
       processResult(data)
     },
-    onTTSChunk: (audioB64) => {
-      playTTSAudio(audioB64)
+    onTTSChunk: (audioB64, payload) => {
+      playVoiceResponse(
+        audioB64,
+        payload?.spoken_text,
+        payload?.language || (selectedLanguage !== 'auto' ? selectedLanguage : 'en'),
+      )
     },
     onError: (detail) => {
       setLoading(false)
@@ -358,13 +364,11 @@ export default function VoiceOrder() {
   const speakAgentPrompt = useCallback(async (text, language) => {
     try {
       const tts = await speakText(text, language)
-      if (tts?.audio_b64) {
-        playTTSAudio(tts.audio_b64)
-      }
+      playVoiceResponse(tts?.audio_b64, tts?.text || text, language)
     } catch {
-      // Fall back to the visual prompt if TTS is unavailable.
+      playVoiceResponse(null, text, language)
     }
-  }, [playTTSAudio])
+  }, [playVoiceResponse])
 
   const autoListenSilenceHandler = useCallback(() => {
     if (!autoListenRef.current) return
