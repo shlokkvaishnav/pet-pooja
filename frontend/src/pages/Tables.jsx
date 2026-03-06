@@ -131,6 +131,7 @@ function SettleModal({ table, onClose, onSettle }) {
 function AddItemModal({ table, onClose, onItemAdded }) {
   const [menuItems, setMenuItems] = useState([])
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(null)
   const [addedItems, setAddedItems] = useState({}) // itemId -> true (brief success flash)
@@ -138,10 +139,10 @@ function AddItemModal({ table, onClose, onItemAdded }) {
 
   useEffect(() => {
     setLoading(true)
-    getMenuItemsList(search)
+    getMenuItemsList(debouncedSearch)
       .then((d) => setMenuItems(d.items || []))
       .finally(() => setLoading(false))
-  }, [search])
+  }, [debouncedSearch])
 
   const handleAdd = async (itemId) => {
     setAdding(itemId)
@@ -173,14 +174,17 @@ function AddItemModal({ table, onClose, onItemAdded }) {
           <button className="tbl-modal-close" onClick={onClose}>×</button>
         </div>
         <div className="tbl-modal-body">
-          <input
-            className="input"
-            placeholder="Search menu items..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ marginBottom: 'var(--space-4)' }}
-            autoFocus
-          />
+          <div className="search-input-wrap">
+            <input
+              className="input"
+              placeholder="Search menu items..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') setDebouncedSearch(search.trim()) }}
+              autoFocus
+            />
+            {loading && <span className="search-dots"><span /><span /><span /></span>}
+          </div>
           {addError && (
             <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 'var(--space-3)', padding: '6px 10px', background: 'var(--danger-subtle)', borderRadius: 'var(--radius-sm)' }}>
               {addError}
@@ -232,6 +236,7 @@ export default function Tables() {
   const [statusFilter, setStatusFilter] = useState('')
   const [sectionFilter, setSectionFilter] = useState('')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [viewMode, setViewMode] = useState('floor')
   const [selectedTableId, setSelectedTableId] = useState(null)
   const [settleTarget, setSettleTarget] = useState(null)
@@ -243,9 +248,9 @@ export default function Tables() {
     () => ({
       status: statusFilter || undefined,
       section: sectionFilter || undefined,
-      search: search || undefined,
+      search: debouncedSearch || undefined,
     }),
-    [statusFilter, sectionFilter, search],
+    [statusFilter, sectionFilter, debouncedSearch],
   )
 
   const reload = useCallback(() => {
@@ -388,12 +393,16 @@ export default function Tables() {
         <div className="card-body">
           <div className="tables-toolbar">
             <div className="filters-row tables-filters-row">
-              <input
-                className="input"
-                placeholder="Search table number"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+              <div className="search-input-wrap">
+                <input
+                  className="input"
+                  placeholder="Search table number"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setDebouncedSearch(search.trim()) }}
+                />
+                {loading && <span className="search-dots"><span /><span /><span /></span>}
+              </div>
               <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <option value="">All Statuses</option>
                 <option value="empty">Available</option>

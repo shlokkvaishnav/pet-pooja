@@ -348,16 +348,20 @@ def confirm_order(
 def get_recent_orders(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """
     Recent orders with pagination, sorted by created_at desc.
     """
-    total = db.query(func.count(Order.id)).scalar() or 0
+    q = db.query(Order)
+    if restaurant_id:
+        q = q.filter(Order.restaurant_id == restaurant_id)
+
+    total = q.count()
 
     orders = (
-        db.query(Order)
-        .order_by(desc(Order.created_at))
+        q.order_by(desc(Order.created_at))
         .offset(offset)
         .limit(limit)
         .all()

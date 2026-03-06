@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { cancelOpsOrder, createOpsOrder, getOpsOrder, getOpsOrders, updateOpsOrder } from '../api/client'
+import { cancelOpsOrder, getOpsOrder, getOpsOrders, updateOpsOrder } from '../api/client'
 import { formatRupees, formatRupeesShort } from '../utils/format'
-import { motion } from 'motion/react'
+import { motion, AnimatePresence } from 'motion/react'
 import { ORDERS_PAGE_LIMIT } from '../config'
 
 const statusColors = {
@@ -34,12 +34,11 @@ export default function Orders() {
   const [orderPreview, setOrderPreview] = useState(null)
   const [sortBy, setSortBy] = useState('created_at')
   const [sortDir, setSortDir] = useState('desc')
+  const [editModal, setEditModal] = useState(null)
+  const [editTable, setEditTable] = useState('')
+  const [editAmount, setEditAmount] = useState('')
+  const [cancelModal, setCancelModal] = useState(null)
   const limit = ORDERS_PAGE_LIMIT
-
-  useEffect(() => {
-    const id = setTimeout(() => setDebouncedSearch(search.trim()), 300)
-    return () => clearTimeout(id)
-  }, [search])
 
   const params = useMemo(
     () => ({
@@ -53,7 +52,7 @@ export default function Orders() {
     [page, status, orderType, source, debouncedSearch],
   )
 
-  const refreshOrders = () => getOpsOrders(params).then(setData)
+  const refreshOrders = () => getOpsOrders({ ...params, _t: Date.now() }).then(setData)
 
   useEffect(() => {
     setLoading(true)
@@ -63,28 +62,6 @@ export default function Orders() {
       .catch((err) => setError(err?.detail || err?.message || 'Failed to load orders'))
       .finally(() => setLoading(false))
   }, [params])
-
-  const handleCreateOrder = async () => {
-    setBusyOrderId('create')
-    setNotice('')
-    setError('')
-    try {
-      const nextTable = window.prompt('Table number for new order (optional):', '')
-      await createOpsOrder({
-        source: 'manual',
-        order_type: 'dine_in',
-        status: 'building',
-        total_amount: 0,
-        table_number: (nextTable || '').trim() || null,
-      })
-      await refreshOrders()
-      setNotice('Manual order created successfully.')
-    } catch (err) {
-      setError(err?.detail || err?.message || 'Could not create order')
-    } finally {
-      setBusyOrderId('')
-    }
-  }
 
   const handleViewOrder = async (orderId) => {
     setBusyOrderId(orderId)
@@ -100,20 +77,25 @@ export default function Orders() {
   }
 
   const handleEditOrder = async (order) => {
+    if (!editModal) {
+      setEditModal(order)
+      setEditTable(order.table_number || '')
+      setEditAmount(String(order.total_amount || 0))
+      return
+    }
     setBusyOrderId(order.order_id)
     setNotice('')
     setError('')
     try {
-      const nextTable = window.prompt('Update table number (leave blank to clear):', order.table_number || '')
-      const nextAmountRaw = window.prompt('Update total amount:', String(order.total_amount || 0))
-      const parsedAmount = Number(nextAmountRaw)
+      const parsedAmount = Number(editAmount)
       if (Number.isNaN(parsedAmount) || parsedAmount < 0) {
         throw new Error('Total amount must be a non-negative number.')
       }
       await updateOpsOrder(order.order_id, {
-        table_number: (nextTable || '').trim() || null,
+        table_number: editTable.trim() || null,
         total_amount: parsedAmount,
       })
+      setEditModal(null)
       await refreshOrders()
       setNotice(`Order ${formatOrderId(order)} updated.`)
     } catch (err) {
@@ -123,16 +105,45 @@ export default function Orders() {
     }
   }
 
+  const submitEditOrder = async () => {
+    if (!editModal) return
+    setBusyOrderId(editModal.order_id)
+    setNotice('')
+    setError('')
+    try {
+      const parsedAmount = Number(editAmount)
+      if (Number.isNaN(parsedAmount) || parsedAmount < 0) {
+        throw new Error('Total amount must be a non-negative number.')
+      }
+      await updateOpsOrder(editModal.order_id, {
+        table_number: editTable.trim() || null,
+        total_amount: parsedAmount,
+      })
+      const savedOrder = editModal
+      setEditModal(null)
+      await refreshOrders()
+      setNotice(`Order ${formatOrderId(savedOrder)} updated.`)
+    } catch (err) {
+      setError(err?.detail || err?.message || 'Could not update order')
+    } finally {
+      setBusyOrderId('')
+    }
+  }
+
   const handleCancelOrder = async (order) => {
     if (order.status === 'cancelled') return
-    const ok = window.confirm(`Cancel order ${formatOrderId(order)}?`)
-    if (!ok) return
+    setCancelModal(order)
+  }
 
+  const confirmCancelOrder = async () => {
+    if (!cancelModal) return
+    const order = cancelModal
     setBusyOrderId(order.order_id)
     setNotice('')
     setError('')
     try {
       await cancelOpsOrder(order.order_id)
+      setCancelModal(null)
       await refreshOrders()
       setNotice(`Order ${formatOrderId(order)} cancelled.`)
     } catch (err) {
@@ -197,12 +208,6 @@ export default function Orders() {
           <p className="app-hero-sub">Live order flow and status monitoring.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <button className="btn btn-primary" onClick={handleCreateOrder} disabled={busyOrderId === 'create'}>
-            + New Order
-          </button>
-          <button className="btn btn-ghost" onClick={() => navigate('/dashboard/voice-order')}>
-            Voice Order
-          </button>
           <div className="app-hero-metrics">
             <div className="app-kpi">
               <div className="app-kpi-label">Total Orders (30d)</div>
@@ -270,12 +275,16 @@ export default function Orders() {
         <div className="card-header">Filters</div>
         <div className="card-body">
           <div className="filters-row orders-filters-row">
-            <input
-              className="input"
-              placeholder="Search order id or number"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-            />
+            <div className="search-input-wrap">
+              <input
+                className="input"
+                placeholder="Search order id or number"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { setDebouncedSearch(search.trim()); setPage(1) } }}
+              />
+              {loading && <span className="search-dots"><span /><span /><span /></span>}
+            </div>
             <select className="input" value={status} onChange={(e) => { setStatus(e.target.value); setPage(1) }}>
               <option value="">All Statuses</option>
               <option value="building">Open</option>
@@ -360,6 +369,83 @@ export default function Orders() {
           )}
         </div>
       </div>
+
+      <AnimatePresence>
+        {editModal && (
+          <div className="inventory-modal-backdrop" onClick={() => setEditModal(null)}>
+            <motion.div
+              className="inventory-modal"
+              initial={{ opacity: 0, scale: 0.95, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 16 }}
+              transition={{ duration: 0.2 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Edit Order {formatOrderId(editModal)}</span>
+                <button className="btn btn-ghost" onClick={() => setEditModal(null)}>Close</button>
+              </div>
+              <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  Table Number
+                  <input
+                    className="input"
+                    placeholder="Leave blank to clear"
+                    value={editTable}
+                    onChange={(e) => setEditTable(e.target.value)}
+                  />
+                </label>
+                <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  Total Amount
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                  />
+                </label>
+                <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+                  <button className="btn btn-ghost" onClick={() => setEditModal(null)}>Cancel</button>
+                  <button className="btn btn-primary" onClick={submitEditOrder} disabled={!!busyOrderId}>
+                    {busyOrderId ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {cancelModal && (
+          <div className="inventory-modal-backdrop" onClick={() => setCancelModal(null)}>
+            <motion.div
+              className="inventory-modal"
+              initial={{ opacity: 0, scale: 0.95, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 16 }}
+              transition={{ duration: 0.2 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Cancel Order</span>
+                <button className="btn btn-ghost" onClick={() => setCancelModal(null)}>Close</button>
+              </div>
+              <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Are you sure you want to cancel order <strong>{formatOrderId(cancelModal)}</strong>? This action cannot be undone.
+                </p>
+                <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+                  <button className="btn btn-ghost" onClick={() => setCancelModal(null)}>Keep Order</button>
+                  <button className="btn btn-primary" style={{ background: 'var(--danger)' }} onClick={confirmCancelOrder} disabled={!!busyOrderId}>
+                    {busyOrderId ? 'Cancelling...' : 'Confirm Cancel'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

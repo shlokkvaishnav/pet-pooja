@@ -248,7 +248,7 @@ export default function MenuAnalysis() {
                 <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>Category Revenue Trends (30-day)</span>
                   <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => setShowAllCategoryTrends((prev) => !prev)}>
-                    {showAllCategoryTrends ? 'Hide Zero-Revenue Categories' : 'Show All'}
+                    {showAllCategoryTrends ? 'Hide Zero-Revenue' : 'Show All'}
                   </button>
                 </div>
                 <div className="card-body" style={{ padding: 0 }}>
@@ -265,8 +265,8 @@ export default function MenuAnalysis() {
                       {categoryTrends.map((row, index) => (
                         <tr key={index}>
                           <td style={{ fontWeight: 600 }}>{row.category_name}</td>
-                          <td className="col-number">INR {(row.revenue_last_30d || 0).toLocaleString('en-IN')}</td>
-                          <td className="col-number">INR {(row.revenue_prev_30d || 0).toLocaleString('en-IN')}</td>
+                          <td className="col-number">₹{(row.revenue_last_30d || 0).toLocaleString('en-IN')}</td>
+                          <td className="col-number">₹{(row.revenue_prev_30d || 0).toLocaleString('en-IN')}</td>
                           <td className="col-number" style={{ fontWeight: 700, color: row.trend_pct > 0 ? 'var(--success)' : row.trend_pct < 0 ? 'var(--danger)' : 'var(--text-muted)' }}>
                             {row.trend_arrow} {row.trend_pct > 0 ? '+' : ''}{row.trend_pct}%
                           </td>
@@ -317,7 +317,7 @@ export default function MenuAnalysis() {
                   {priceInsight.opportunities.map((row) => (
                     <tr key={row.id}>
                       <td style={{ fontWeight: 600 }}>{row.item_name}</td>
-                      <td className="col-number">Rs {Number(row.current_price || 0).toLocaleString('en-IN')}</td>
+                      <td className="col-number">₹{Number(row.current_price || 0).toLocaleString('en-IN')}</td>
                       <td>{row.suggested_action}</td>
                       <td className="col-number" style={{ color: String(row.expected_cm_impact).includes('+') ? 'var(--success)' : 'var(--text-secondary)' }}>{row.expected_cm_impact}</td>
                       <td className="col-number" style={{ color: String(row.expected_volume_impact).includes('+') ? 'var(--success)' : 'var(--text-secondary)' }}>{row.expected_volume_impact}</td>
@@ -326,13 +326,22 @@ export default function MenuAnalysis() {
                         <button
                           className={acknowledged[row.id] ? 'btn btn-secondary' : 'btn btn-ghost'}
                           style={{ fontSize: 11 }}
-                          onClick={() => {
-                            setAcknowledged((prev) => ({ ...prev, [row.id]: true }))
-                            console.log('Price suggestion acknowledged', row)
+                          onClick={async () => {
+                            if (row.suggested_price && row.item_id) {
+                              try {
+                                const { updateMenuItemPrice } = await import('../api/client')
+                                await updateMenuItemPrice(row.item_id, row.suggested_price)
+                                setAcknowledged((prev) => ({ ...prev, [row.id]: true }))
+                              } catch (err) {
+                                console.error('Price update failed:', err)
+                              }
+                            } else {
+                              setAcknowledged((prev) => ({ ...prev, [row.id]: true }))
+                            }
                           }}
                           disabled={!!acknowledged[row.id]}
                         >
-                          {acknowledged[row.id] ? 'Acknowledged' : 'Apply Suggestion'}
+                          {acknowledged[row.id] ? 'Applied' : 'Apply Suggestion'}
                         </button>
                       </td>
                     </tr>

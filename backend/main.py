@@ -274,8 +274,8 @@ class LoginInput(BaseModel):
     pin: str = Field(..., min_length=4, max_length=6, pattern=r"^\d{4,6}$")
 
 
-@app.post("/api/auth/login", tags=["Auth"])
-def login(body: LoginInput, db=Depends(get_db)):
+@app.post("/api/auth/staff-login", tags=["Auth"])
+def staff_login(body: LoginInput, db=Depends(get_db)):
     """Authenticate staff via PIN → JWT token."""
     return authenticate_staff(body.pin, db)
 

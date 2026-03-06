@@ -9,7 +9,7 @@ const QUADRANT_META = {
 }
 
 function ItemTable({ items, categoryFilter, quadrantFilter }) {
-  const [sortBy, setSortBy] = useState('cm_percent')
+  const [sortBy, setSortBy] = useState('margin_pct')
   const [sortDir, setSortDir] = useState('desc')
   const thresholds = useThresholds()
 
@@ -85,7 +85,7 @@ function ItemTable({ items, categoryFilter, quadrantFilter }) {
               </td>
               <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.category}</td>
               <td className="col-number" style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
-                INR {item.selling_price}
+                ₹{item.selling_price}
               </td>
               <td className="col-number">
                 <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13, color: cmColor(marginPct) }}>

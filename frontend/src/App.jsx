@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { LanguageProvider } from './context/LanguageContext'
 import { AuthProvider } from './context/AuthContext'
 import { SettingsProvider } from './context/SettingsContext'
+import ErrorBoundary from './components/ErrorBoundary'
 
 const RequireAuth = lazy(() => import('./components/RequireAuth'))
 const DashboardLayout = lazy(() => import('./layouts/DashboardLayout'))
@@ -22,6 +23,16 @@ const AboutUs = lazy(() => import('./pages/AboutUs'))
 const Product = lazy(() => import('./pages/Product'))
 const Contact = lazy(() => import('./pages/Contact'))
 
+function NotFound() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', gap: 12 }}>
+      <div style={{ fontSize: 64, fontWeight: 800, color: 'var(--accent)' }}>404</div>
+      <p style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Page not found</p>
+      <a href="/" style={{ fontSize: 13, color: 'var(--accent)', textDecoration: 'underline' }}>Go Home</a>
+    </div>
+  )
+}
+
 function RouteFallback() {
   return (
     <div className="loading" style={{ minHeight: '40vh' }}>
@@ -36,6 +47,7 @@ export default function App() {
       <AuthProvider>
         <SettingsProvider>
         <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <ErrorBoundary>
           <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/" element={<Landing />} />
@@ -63,8 +75,10 @@ export default function App() {
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />
               </Route>
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
+          </ErrorBoundary>
         </BrowserRouter>
         </SettingsProvider>
       </AuthProvider>

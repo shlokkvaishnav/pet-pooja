@@ -40,17 +40,18 @@ function CustomTooltip({ payload }) {
   return (
     <div
       style={{
-        background: 'var(--bg-surface)',
-        border: '1px solid var(--border-mid)',
+        background: 'var(--bg-overlay)',
+        border: '1px solid var(--border-strong)',
         borderRadius: 'var(--radius-md)',
         padding: 'var(--space-4)',
         fontSize: 12,
         fontFamily: 'var(--font-body)',
         minWidth: 220,
-        boxShadow: 'var(--shadow-lg)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+        color: '#FFFFFF'
       }}
     >
-      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 6 }}>{item.name}</div>
+      <div style={{ fontWeight: 700, fontSize: 14, color: '#FFFFFF', marginBottom: 6 }}>{item.name}</div>
       <div
         style={{
           display: 'inline-flex',
@@ -70,17 +71,17 @@ function CustomTooltip({ payload }) {
         {item.quadrant?.replace('_', ' ')}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'rgba(255,255,255,0.7)' }}>
           <span>Popularity</span>
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{item.x.toFixed(0)} / 100</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: '#FFFFFF' }}>{item.x.toFixed(0)} / 100</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'rgba(255,255,255,0.7)' }}>
           <span>CM%</span>
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{item.y.toFixed(1)}%</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: '#FFFFFF' }}>{item.y.toFixed(1)}%</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', color: 'rgba(255,255,255,0.7)' }}>
           <span>Price</span>
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>INR {item.selling_price}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: '#FFFFFF' }}>₹{item.selling_price}</span>
         </div>
       </div>
       {item.action_recommendation && (

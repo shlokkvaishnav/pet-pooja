@@ -64,6 +64,7 @@ def _get_thresholds(db: Session, restaurant_id: int | None) -> dict:
 _cache_lock = threading.Lock()
 _cache: dict = {}
 _CACHE_TTL = 300  # 5 minutes
+_CACHE_MAX_SIZE = 100
 
 
 def _get_cached(key: str):
@@ -76,8 +77,11 @@ def _get_cached(key: str):
 
 
 def _set_cached(key: str, data):
-    """Store data in cache with timestamp."""
+    """Store data in cache with timestamp. Evicts oldest entries if cache is full."""
     with _cache_lock:
+        if len(_cache) >= _CACHE_MAX_SIZE:
+            oldest_key = min(_cache, key=lambda k: _cache[k]["ts"])
+            del _cache[oldest_key]
         _cache[key] = {"data": data, "ts": time.time()}
 
 

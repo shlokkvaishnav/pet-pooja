@@ -72,6 +72,11 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
       recordingStartRef.current = Date.now()
       stoppedRef.current = false
 
+      if (!navigator.mediaDevices?.getUserMedia) {
+        alert('Microphone is not available. Please use HTTPS or localhost.')
+        return
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
       const audioCtx = new AudioContext()
@@ -199,20 +204,20 @@ const VoiceRecorder = forwardRef(function VoiceRecorder(props, ref) {
   }, [isRecording])
 
   useEffect(() => {
-    let frameId
+    let timerId
     if (isRecording) {
       const animate = () => {
         setBarHeights(
           Array.from({ length: VISUALIZER_BARS }, () => 20 + Math.random() * 80)
         )
-        frameId = requestAnimationFrame(animate)
+        timerId = setTimeout(animate, 67) // ~15fps
       }
-      frameId = requestAnimationFrame(animate)
+      timerId = setTimeout(animate, 67)
     } else {
       setBarHeights(Array.from({ length: VISUALIZER_BARS }, () => 4))
     }
     return () => {
-      if (frameId) cancelAnimationFrame(frameId)
+      if (timerId) clearTimeout(timerId)
     }
   }, [isRecording])
 

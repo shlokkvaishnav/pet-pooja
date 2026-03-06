@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { exportReportsCsv, getOpsReportsFiltered } from '../api/client'
 import { formatRupees } from '../utils/format'
 import { motion } from 'motion/react'
+import { Download } from 'lucide-react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -16,11 +17,14 @@ import {
 } from 'recharts'
 
 const TOOLTIP_STYLE = {
-  backgroundColor: 'var(--bg-surface)',
-  borderColor: 'var(--border-subtle)',
-  color: 'var(--text-primary)',
+  backgroundColor: 'var(--bg-overlay)',
+  border: '1px solid var(--border-strong)',
+  padding: '8px 12px',
+  color: '#FFFFFF',
   fontSize: 12,
   fontFamily: 'var(--font-body)',
+  borderRadius: 8,
+  boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
 }
 
 function formatShortDate(value) {
@@ -50,17 +54,50 @@ export default function Reports() {
   const [days, setDays] = useState(14)
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [appliedRange, setAppliedRange] = useState({ startDate: '', endDate: '' })
-  const [exportKind, setExportKind] = useState('daily')
+  const [customRange, setCustomRange] = useState(false)
   const [loading, setLoading] = useState(true)
 
+  // When days dropdown changes, auto-compute start/end dates
   useEffect(() => {
+    if (customRange) return
+    const end = new Date()
+    const start = new Date()
+    start.setDate(end.getDate() - days + 1)
+    setStartDate(start.toISOString().slice(0, 10))
+    setEndDate(end.toISOString().slice(0, 10))
+  }, [days, customRange])
+
+  function handleDaysChange(val) {
+    setCustomRange(false)
+    setDays(val)
+  }
+
+  function handleStartDateChange(val) {
+    setCustomRange(true)
+    setStartDate(val)
+    if (val && endDate) {
+      const diff = Math.round((new Date(endDate) - new Date(val)) / 86400000) + 1
+      if (diff > 0) setDays(diff)
+    }
+  }
+
+  function handleEndDateChange(val) {
+    setCustomRange(true)
+    setEndDate(val)
+    if (startDate && val) {
+      const diff = Math.round((new Date(val) - new Date(startDate)) / 86400000) + 1
+      if (diff > 0) setDays(diff)
+    }
+  }
+
+  useEffect(() => {
+    if (!startDate || !endDate) return
     setLoading(true)
     getOpsReportsFiltered({
       days,
       top_n: 8,
-      start_date: appliedRange.startDate || undefined,
-      end_date: appliedRange.endDate || undefined,
+      start_date: startDate,
+      end_date: endDate,
     })
       .then((res) => {
         setData(res.daily || [])
@@ -73,7 +110,7 @@ export default function Reports() {
         setRepeatRate(res.customer_repeat_rate || null)
       })
       .finally(() => setLoading(false))
-  }, [days, appliedRange.startDate, appliedRange.endDate])
+  }, [days, startDate, endDate])
 
   const chartData = useMemo(
     () => data.map((row) => ({
@@ -84,6 +121,18 @@ export default function Reports() {
     })),
     [data],
   )
+
+  function downloadCsv(kind) {
+    exportReportsCsv({ kind, days })
+      .then((blob) => {
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `reports_${kind}_${days}d.csv`
+        a.click()
+        window.URL.revokeObjectURL(url)
+      })
+  }
 
   const totalRevenue = data.reduce((sum, d) => sum + (d.revenue || 0), 0)
   const voiceAccuracyPct = voiceAccuracy?.accuracy_pct || 0
@@ -114,36 +163,14 @@ export default function Reports() {
       <div className="card">
         <div className="card-body">
           <div className="filters-row reports-filters-row">
-            <select className="input" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <select className="input" value={days} onChange={(e) => handleDaysChange(Number(e.target.value))}>
               <option value={7}>Last 7 days</option>
               <option value={14}>Last 14 days</option>
               <option value={30}>Last 30 days</option>
               <option value={60}>Last 60 days</option>
             </select>
-            <input className="input" type="date" value={startDate} max={endDate || undefined} onChange={(e) => setStartDate(e.target.value)} />
-            <input className="input" type="date" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} />
-            <button className="btn btn-ghost" onClick={() => setAppliedRange({ startDate, endDate })}>Apply Range</button>
-            <select className="input" value={exportKind} onChange={(e) => setExportKind(e.target.value)}>
-              <option value="daily">Export Daily</option>
-              <option value="top_items">Export Top Items</option>
-              <option value="top_categories">Export Top Categories</option>
-            </select>
-            <button
-              className="btn btn-ghost"
-              onClick={() => {
-                exportReportsCsv({ kind: exportKind, days })
-                  .then((blob) => {
-                    const url = window.URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = `reports_${exportKind}_${days}d.csv`
-                    a.click()
-                    window.URL.revokeObjectURL(url)
-                  })
-              }}
-            >
-              Download CSV
-            </button>
+            <input className="input" type="date" value={startDate} max={endDate || undefined} onChange={(e) => handleStartDateChange(e.target.value)} />
+            <input className="input" type="date" value={endDate} min={startDate || undefined} onChange={(e) => handleEndDateChange(e.target.value)} />
           </div>
         </div>
       </div>
@@ -152,7 +179,10 @@ export default function Reports() {
         <motion.div className="card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <div className="card-header">
             Daily Revenue
-            <span className="reports-live-chip">Today (live)<span className="reports-live-dot" /></span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="reports-live-chip">Today (live)<span className="reports-live-dot" /></span>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px' }} title="Download CSV" onClick={() => downloadCsv('daily')}><Download size={14} /></button>
+            </span>
           </div>
           <div className="card-body">
             {chartData.length === 0 ? (
@@ -169,7 +199,7 @@ export default function Reports() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                   <XAxis dataKey="date_label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => formatRupees(v)} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} formatter={(v) => formatRupees(v)} />
                   <Area type="monotone" dataKey="revenue_solid" stroke="var(--accent)" fill="url(#revFill)" strokeWidth={2} connectNulls />
                   <Line type="monotone" dataKey="revenue_live" stroke="var(--accent)" strokeDasharray="6 4" strokeWidth={2} dot={{ r: 4 }} connectNulls />
                 </AreaChart>
@@ -179,7 +209,10 @@ export default function Reports() {
         </motion.div>
 
         <motion.div className="card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-          <div className="card-header">Daily Orders</div>
+          <div className="card-header">
+            Daily Orders
+            <button className="btn btn-ghost" style={{ padding: '4px 8px' }} title="Download CSV" onClick={() => downloadCsv('daily')}><Download size={14} /></button>
+          </div>
           <div className="card-body">
             {chartData.length === 0 ? (
               <div className="muted">No report data available.</div>
@@ -189,7 +222,7 @@ export default function Reports() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                   <XAxis dataKey="date_label" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
                   <YAxis tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} />
                   <Bar dataKey="orders" fill="var(--info)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -292,7 +325,10 @@ export default function Reports() {
 
       <div className="app-grid-2">
         <div className="card">
-          <div className="card-header">Top Items</div>
+          <div className="card-header">
+            Top Items
+            <button className="btn btn-ghost" style={{ padding: '4px 8px' }} title="Download CSV" onClick={() => downloadCsv('top_items')}><Download size={14} /></button>
+          </div>
           <div className="card-body">
             {topItems.length === 0 ? (
               <div className="muted">No item drilldown available.</div>
@@ -320,7 +356,10 @@ export default function Reports() {
         </div>
 
         <div className="card">
-          <div className="card-header">Top Categories</div>
+          <div className="card-header">
+            Top Categories
+            <button className="btn btn-ghost" style={{ padding: '4px 8px' }} title="Download CSV" onClick={() => downloadCsv('top_categories')}><Download size={14} /></button>
+          </div>
           <div className="card-body">
             {topCategories.length === 0 ? (
               <div className="muted">No category drilldown available.</div>

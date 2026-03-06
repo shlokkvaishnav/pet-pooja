@@ -9,7 +9,8 @@ export function AuthProvider({ children }) {
 
     const [restaurant, setRestaurant] = useState(() => {
         const saved = localStorage.getItem('sizzle_restaurant')
-        return saved ? JSON.parse(saved) : null
+        if (!saved) return null
+        try { return JSON.parse(saved) } catch { return null }
     })
 
     const login = (restaurantData) => {
