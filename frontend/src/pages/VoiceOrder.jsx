@@ -5,6 +5,7 @@ import OrderSummary from '../components/OrderSummary'
 import KOTTicket from '../components/KOTTicket'
 import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
+import { Trash2, ShoppingCart, ChevronUp, ChevronDown, X } from 'lucide-react'
 
 function generateSessionId() {
   return 'sess-' + Math.random().toString(36).slice(2, 10)
@@ -16,14 +17,15 @@ export default function VoiceOrder() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [isSpeaking, setIsSpeaking] = useState(false)
+  const [actionFeedback, setActionFeedback] = useState(null) // {type, message}
+  const [orderTabOpen, setOrderTabOpen] = useState(false)
   const sessionId = useRef(generateSessionId())
   const currentAudioRef = useRef(null)
 
   // ── TTS Audio Playback ──
   const playTTSAudio = useCallback((base64Audio) => {
-    if (!base64Audio) return  // TTS failed — degrade silently
+    if (!base64Audio) return
 
-    // Stop anything currently playing
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
       currentAudioRef.current.src = ''
@@ -56,17 +58,61 @@ export default function VoiceOrder() {
     }
   }, [])
 
+  // ── Process result and show feedback ──
+  const processResult = useCallback((data) => {
+    setResult(data)
+
+    // Auto-open order tab when items exist in cart
+    if (data.session_items?.length > 0) {
+      setOrderTabOpen(true)
+    } else {
+      setOrderTabOpen(false)
+    }
+
+    // Show action feedback based on intent
+    const intent = data.intent
+    if (intent === 'CANCEL') {
+      const cancelledNames = data.items?.map(i => i.item_name).join(', ')
+      if (cancelledNames) {
+        setActionFeedback({ type: 'cancel', message: `Removed: ${cancelledNames}` })
+      } else if (!data.session_items?.length) {
+        setActionFeedback({ type: 'cancel', message: 'Order cleared' })
+      } else {
+        setActionFeedback({ type: 'info', message: data.tts_text || data.user_messages?.[0] || 'Which item to remove?' })
+      }
+    } else if (intent === 'MODIFY') {
+      setActionFeedback({ type: 'modify', message: data.tts_text || 'Item updated' })
+    } else if (intent === 'ORDER' && data.items?.length > 0) {
+      const names = data.items.map(i => `${i.quantity}× ${i.item_name}`).join(', ')
+      setActionFeedback({ type: 'add', message: `Added: ${names}` })
+    } else if (intent === 'CONFIRM') {
+      // Voice-triggered confirmation
+      setActionFeedback({ type: 'confirm', message: 'Order confirmed via voice!' })
+    } else if (data.user_messages?.length > 0) {
+      setActionFeedback({ type: 'info', message: data.user_messages[0] })
+    } else {
+      setActionFeedback(null)
+    }
+
+    // Auto-play TTS response
+    if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
+
+    // Auto-confirm if voice said "confirm"
+    if (intent === 'CONFIRM' && data.session_items?.length > 0) {
+      handleVoiceConfirm(data)
+    }
+  }, [playTTSAudio])
+
   const handleTextOrder = async () => {
     if (!textInput.trim()) return
     setLoading(true)
     setError(null)
     try {
       const data = await submitTextOrder(textInput, sessionId.current)
-      setResult(data)
-      // Auto-play TTS response
-      if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
+      processResult(data)
+      setTextInput('')
     } catch (err) {
-      setError(err.response?.data?.detail || 'Order processing failed')
+      setError(err.response?.data?.detail || err.detail || 'Order processing failed')
     }
     setLoading(false)
   }
@@ -76,12 +122,10 @@ export default function VoiceOrder() {
     setError(null)
     try {
       const data = await transcribeAudio(audioBlob, sessionId.current)
-      setResult(data)
-      // Auto-play TTS response
-      if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
+      processResult(data)
     } catch (err) {
       const status = err.response?.status
-      const detail = err.response?.data?.detail || 'Voice processing failed'
+      const detail = err.response?.data?.detail || err.detail || 'Voice processing failed'
       if (status === 503) setError('Speech recognition is unavailable. Please try text input.')
       else if (status === 422) setError('Could not understand the order. Please try again.')
       else setError(detail)
@@ -89,15 +133,43 @@ export default function VoiceOrder() {
     setLoading(false)
   }
 
-  const handleConfirm = async () => {
-    if (!result?.order) return
+  // ── Remove item via UI button ──
+  const handleRemoveItem = async (itemName) => {
     setLoading(true)
     setError(null)
     try {
-      await confirmOrder(result.order, result.kot)
+      const data = await submitTextOrder(`remove ${itemName}`, sessionId.current)
+      processResult(data)
+    } catch (err) {
+      setError(err.response?.data?.detail || err.detail || 'Failed to remove item')
+    }
+    setLoading(false)
+  }
+
+  // ── Voice-triggered confirm ──
+  const handleVoiceConfirm = async (data) => {
+    const orderToConfirm = data.session_order || data.order
+    if (!orderToConfirm) return
+    setLoading(true)
+    try {
+      await confirmOrder(orderToConfirm, data.kot)
       setResult(prev => ({ ...prev, confirmed: true }))
     } catch (err) {
-      setError(err.response?.data?.detail || 'Order confirmation failed')
+      setError(err.response?.data?.detail || err.detail || 'Order confirmation failed')
+    }
+    setLoading(false)
+  }
+
+  const handleConfirm = async () => {
+    const orderToConfirm = result?.session_order || result?.order
+    if (!orderToConfirm) return
+    setLoading(true)
+    setError(null)
+    try {
+      await confirmOrder(orderToConfirm, result.kot)
+      setResult(prev => ({ ...prev, confirmed: true }))
+    } catch (err) {
+      setError(err.response?.data?.detail || err.detail || 'Order confirmation failed')
     }
     setLoading(false)
   }
@@ -107,13 +179,31 @@ export default function VoiceOrder() {
     setResult(null)
     setError(null)
     setTextInput('')
+    setActionFeedback(null)
+    setOrderTabOpen(false)
     sessionId.current = generateSessionId()
   }
 
   const confColor = (c) => c >= 0.9 ? 'var(--success)' : c >= 0.85 ? 'var(--warning)' : 'var(--danger)'
 
-  // Determine step: 1=Listen, 2=Review, 3=Confirmed
+  // Cart items from session (accumulated across all turns)
+  const cartItems = result?.session_items || []
+  const hasCart = cartItems.length > 0
+
+  // Effective order for display (use session_order which covers all turns)
+  const effectiveOrder = result?.session_order || result?.order
+
+  // Determine step: 1=Listen, 2=Review (with continued input), 3=Confirmed
   const step = result?.confirmed ? 3 : result ? 2 : 1
+
+  // Feedback colors
+  const feedbackStyles = {
+    add: { bg: 'color-mix(in srgb, var(--success) 12%, transparent)', color: 'var(--success)', icon: '+' },
+    cancel: { bg: 'color-mix(in srgb, var(--danger) 12%, transparent)', color: 'var(--danger)', icon: '−' },
+    modify: { bg: 'color-mix(in srgb, var(--warning) 12%, transparent)', color: 'var(--warning)', icon: '↻' },
+    confirm: { bg: 'color-mix(in srgb, var(--success) 12%, transparent)', color: 'var(--success)', icon: '✓' },
+    info: { bg: 'color-mix(in srgb, var(--accent) 12%, transparent)', color: 'var(--accent)', icon: 'ℹ' },
+  }
 
   return (
     <motion.div
@@ -141,7 +231,7 @@ export default function VoiceOrder() {
         transition={{ duration: 0.5 }}
       >
         <h1 style={{ fontFamily: 'var(--font-display)' }}>Voice Order</h1>
-        <p>Speak or type an order in English, Hindi, or Hinglish</p>
+        <p>Speak or type to order, modify, remove items, or confirm</p>
       </motion.div>
 
       {/* Step indicator */}
@@ -173,11 +263,14 @@ export default function VoiceOrder() {
         })}
       </div>
 
-      {/* Step 1: Input */}
-      {step === 1 && (
+      {/* ── Voice/Text Input — visible in Step 1 AND Step 2 ── */}
+      {step <= 2 && !result?.confirmed && (
         <StaggerReveal className="grid-2" style={{ marginBottom: 24 }} variants={staggerContainer}>
           <motion.div className="card" variants={staggerItem}>
-            <div className="card-header">Voice Input</div>
+            <div className="card-header">
+              Voice Input
+              {hasCart && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}> — say "remove", "add", or "confirm"</span>}
+            </div>
             <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 32 }}>
               <VoiceRecorder onRecorded={handleAudioRecorded} onStartRecording={handleInterruptAudio} />
               {isSpeaking && (
@@ -196,12 +289,19 @@ export default function VoiceOrder() {
           </motion.div>
 
           <motion.div className="card" variants={staggerItem}>
-            <div className="card-header">Text Input</div>
+            <div className="card-header">
+              Text Input
+              {hasCart && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 400 }}> — "remove paneer tikka", "add 1 coke"</span>}
+            </div>
             <div className="card-body">
               <textarea
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                placeholder="e.g. ek paneer tikka aur do butter naan, extra spicy"
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleTextOrder() } }}
+                placeholder={hasCart
+                  ? 'e.g. remove butter naan, add one lassi, extra spicy dal makhani'
+                  : 'e.g. ek paneer tikka aur do butter naan, extra spicy'
+                }
                 style={{
                   width: '100%', height: 80, padding: 12,
                   background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
@@ -215,7 +315,7 @@ export default function VoiceOrder() {
                 disabled={loading || !textInput.trim()}
                 style={{ marginTop: 12, width: '100%' }}
               >
-                {loading ? 'Processing…' : 'Process Order'}
+                {loading ? 'Processing…' : hasCart ? 'Update Order' : 'Process Order'}
               </button>
             </div>
           </motion.div>
@@ -238,7 +338,46 @@ export default function VoiceOrder() {
         )}
       </AnimatePresence>
 
-      {/* Step 2: Review */}
+      {/* ── Action Feedback Banner ── */}
+      <AnimatePresence>
+        {actionFeedback && step === 2 && (
+          <motion.div
+            initial={{ opacity: 0, y: -10, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: 'auto' }}
+            exit={{ opacity: 0, y: -10, height: 0 }}
+            transition={{ duration: 0.3 }}
+            style={{
+              marginBottom: 16,
+              padding: '10px 16px',
+              borderRadius: 'var(--radius-sm)',
+              background: feedbackStyles[actionFeedback.type]?.bg || 'var(--bg-surface)',
+              border: `1px solid ${feedbackStyles[actionFeedback.type]?.color || 'var(--border-subtle)'}`,
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}
+          >
+            <span style={{
+              width: 22, height: 22, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: feedbackStyles[actionFeedback.type]?.color, color: 'white', fontSize: 12, fontWeight: 700,
+            }}>
+              {feedbackStyles[actionFeedback.type]?.icon}
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 500, color: feedbackStyles[actionFeedback.type]?.color }}>
+              {actionFeedback.message}
+            </span>
+            {result?.tts_text && result.tts_text !== actionFeedback.message && (
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8, fontStyle: 'italic' }}>
+                "{result.tts_text}"
+              </span>
+            )}
+            <button
+              onClick={() => setActionFeedback(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 16, marginLeft: 'auto' }}
+            >×</button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Step 2: Review — with live cart */}
       <AnimatePresence>
         {result && !result.confirmed && (
           <motion.div
@@ -246,8 +385,119 @@ export default function VoiceOrder() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.5 }}
-          >
-            {/* Parsed info */}
+          >            {/* ── Live Cart (from session_items) — shown FIRST ── */}
+            {hasCart && (
+              <motion.div
+                className="card" style={{ marginBottom: 16 }}
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1, duration: 0.4 }}
+              >
+                <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <ShoppingCart size={14} />
+                  <span>Your Cart</span>
+                  <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                    {cartItems.length} {cartItems.length === 1 ? 'item' : 'items'}
+                  </span>
+                </div>
+                <div className="card-body" style={{ padding: 0 }}>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th style={{ textAlign: 'right' }}>Price</th>
+                        <th style={{ textAlign: 'right' }}>Total</th>
+                        <th style={{ textAlign: 'center', width: 50 }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cartItems.map((item, idx) => (
+                        <motion.tr
+                          key={item.item_id || idx}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.05 }}
+                        >
+                          <td style={{ fontWeight: 600, fontSize: 13 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {item.is_veg !== undefined && (
+                                <span className={item.is_veg ? 'veg-indicator veg' : 'veg-indicator non-veg'} />
+                              )}
+                              <span>{item.quantity}× {item.item_name || item.name}</span>
+                            </div>
+                            {/* Modifier chips */}
+                            {item.modifiers && Object.keys(item.modifiers).some(k => {
+                              const v = item.modifiers[k]
+                              return v && v !== 'medium' && v !== 'regular' && k !== 'warnings' && (Array.isArray(v) ? v.length > 0 : v)
+                            }) && (
+                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                                {item.modifiers.spice_level && item.modifiers.spice_level !== 'medium' && (
+                                  <span style={{
+                                    fontSize: 10, padding: '1px 6px', borderRadius: 'var(--radius-full)',
+                                    background: 'var(--warning-subtle)', color: 'var(--warning)',
+                                  }}>🌶️ {item.modifiers.spice_level}</span>
+                                )}
+                                {item.modifiers.add_ons?.map((a, i) => (
+                                  <span key={i} style={{
+                                    fontSize: 10, padding: '1px 6px', borderRadius: 'var(--radius-full)',
+                                    background: 'var(--bg-overlay)', color: 'var(--text-secondary)',
+                                  }}>+ {a.replace('_', ' ')}</span>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
+                            ₹{item.unit_price}
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>₹{item.line_total}</td>
+                          <td style={{ textAlign: 'center' }}>
+                            <button
+                              onClick={() => handleRemoveItem(item.item_name || item.name)}
+                              disabled={loading}
+                              style={{
+                                background: 'none', border: 'none', cursor: 'pointer',
+                                color: 'var(--text-muted)', padding: 4, borderRadius: 'var(--radius-sm)',
+                                transition: 'color 0.2s',
+                              }}
+                              onMouseEnter={e => e.currentTarget.style.color = 'var(--danger)'}
+                              onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                              title={`Remove ${item.item_name || item.name}`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </motion.tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Cart totals */}
+                  {effectiveOrder && (
+                    <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
+                        <span>Subtotal</span>
+                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder.subtotal}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
+                        <span>GST (5%)</span>
+                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder.tax}</span>
+                      </div>
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between',
+                        fontSize: 16, fontWeight: 800, fontFamily: 'var(--font-mono)',
+                        color: 'var(--accent)',
+                        borderTop: '1px solid var(--border-mid)', paddingTop: 8,
+                      }}>
+                        <span style={{ fontFamily: 'var(--font-body)' }}>Total</span>
+                        <span>₹{effectiveOrder.total}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+
+            {/* Parsed info (last turn) */}
             <motion.div
               className="card" style={{ marginBottom: 16 }}
               initial={{ opacity: 0, y: 15 }}
@@ -264,14 +514,17 @@ export default function VoiceOrder() {
                     </p>
                   </div>
                 )}
-                {result.normalized && (
-                  <div style={{ marginBottom: 8 }}>
-                    <span style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Normalized</span>
-                    <p style={{ fontSize: 13, margin: '4px 0 0' }}>{result.normalized}</p>
-                  </div>
-                )}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  {result.intent && <span className={`tag tag-${result.intent === 'ORDER' ? 'star' : 'puzzle'}`}>{result.intent}</span>}
+                  {result.intent && (
+                    <span className={`tag tag-${
+                      result.intent === 'ORDER' ? 'star' :
+                      result.intent === 'CANCEL' ? 'puzzle' :
+                      result.intent === 'MODIFY' ? 'puzzle' :
+                      result.intent === 'CONFIRM' ? 'star' : 'puzzle'
+                    }`}>
+                      {result.intent}
+                    </span>
+                  )}
                   {result.detected_language && <span className="tag" style={{ background: 'var(--bg-overlay)', color: 'var(--text-secondary)' }}>{result.detected_language}</span>}
                   {result.session_id && result.turn_count > 1 && (
                     <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>Turn {result.turn_count}</span>
@@ -279,45 +532,6 @@ export default function VoiceOrder() {
                 </div>
               </div>
             </motion.div>
-
-            {/* Matched Items */}
-            {result.items?.length > 0 && (
-              <motion.div
-                className="card" style={{ marginBottom: 16 }}
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2, duration: 0.4 }}
-              >
-                <div className="card-header">Matched Items</div>
-                <div className="card-body" style={{ padding: 0 }}>
-                  <table className="data-table">
-                    <thead>
-                      <tr><th>Item</th><th style={{ textAlign: 'right' }}>Confidence</th><th style={{ textAlign: 'right' }}>Total</th></tr>
-                    </thead>
-                    <tbody>
-                      {result.items.map((item, idx) => (
-                        <tr key={idx}>
-                          <td style={{ fontWeight: 600, fontSize: 13 }}>
-                            {item.quantity}× {item.item_name}
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <span style={{
-                              fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 600,
-                              padding: '2px 8px', borderRadius: 'var(--radius-full)',
-                              background: `color-mix(in srgb, ${confColor(item.confidence)} 15%, transparent)`,
-                              color: confColor(item.confidence),
-                            }}>
-                              {Math.round(item.confidence * 100)}%
-                            </span>
-                          </td>
-                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>₹{item.line_total}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </motion.div>
-            )}
 
             {/* Disambiguation */}
             {result.needs_clarification && result.disambiguation?.length > 0 && (
@@ -353,8 +567,8 @@ export default function VoiceOrder() {
               </motion.div>
             )}
 
-            {/* No Items Warning */}
-            {result.needs_clarification && (!result.disambiguation || result.disambiguation.length === 0) && (
+            {/* No Items Warning — only show if first turn and no cart */}
+            {result.needs_clarification && (!result.disambiguation || result.disambiguation.length === 0) && !hasCart && result.intent === 'ORDER' && (
               <motion.div
                 className="card" style={{ marginBottom: 16, borderColor: 'var(--warning)' }}
                 initial={{ opacity: 0, x: -10 }}
@@ -366,36 +580,24 @@ export default function VoiceOrder() {
               </motion.div>
             )}
 
-            {/* Session Cart */}
-            {result.session_items?.length > result.items?.length && (
+            {/* Empty cart after cancel-all */}
+            {!hasCart && result.intent === 'CANCEL' && (
               <motion.div
                 className="card" style={{ marginBottom: 16 }}
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3, duration: 0.4 }}
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
               >
-                <div className="card-header">Full Cart (all turns)</div>
-                <div className="card-body">
-                  {result.session_items.map((item, idx) => (
-                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 13 }}>
-                      <span>{item.quantity}× {item.item_name}</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>₹{item.line_total}</span>
-                    </div>
-                  ))}
+                <div className="card-body" style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
+                  <ShoppingCart size={32} style={{ opacity: 0.3, marginBottom: 8 }} />
+                  <p style={{ fontSize: 13 }}>Cart is empty. Start ordering by speaking or typing above.</p>
                 </div>
               </motion.div>
             )}
 
-            {/* Order + KOT side by side */}
-            <StaggerReveal className="grid-2" variants={staggerContainer}>
-              {result.order && <motion.div variants={staggerItem}><OrderSummary order={result.order} /></motion.div>}
-              {result.kot && <motion.div variants={staggerItem}><KOTTicket kot={result.kot} /></motion.div>}
-            </StaggerReveal>
-
             {/* Upsell */}
-            {result.upsell_suggestions?.length > 0 && (
+            {result.upsell_suggestions?.length > 0 && hasCart && (
               <motion.div
-                className="card" style={{ marginTop: 16 }}
+                className="card" style={{ marginBottom: 16 }}
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4, duration: 0.4 }}
@@ -414,34 +616,34 @@ export default function VoiceOrder() {
             )}
 
             {/* Action Buttons */}
-            {result.order && (
-              <motion.div
-                style={{ marginTop: 16, display: 'flex', gap: 12 }}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.5, duration: 0.4 }}
-              >
+            <motion.div
+              style={{ marginTop: 16, display: 'flex', gap: 12 }}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5, duration: 0.4 }}
+            >
+              {hasCart && (
                 <motion.button
                   className="btn btn-primary"
                   onClick={handleConfirm}
-                  disabled={loading || result.needs_clarification}
+                  disabled={loading || (result.needs_clarification && result.intent === 'ORDER' && cartItems.length === 0)}
                   style={{ flex: 1 }}
                   whileHover={{ scale: 1.02, y: -2 }}
                   whileTap={{ scale: 0.98 }}
                 >
-                  {loading ? 'Confirming…' : 'Confirm Order'}
+                  {loading ? 'Confirming…' : `Confirm Order (₹${effectiveOrder?.total || 0})`}
                 </motion.button>
-                <motion.button
-                  className="btn btn-ghost"
-                  onClick={handleNewOrder}
-                  style={{ flex: 1 }}
-                  whileHover={{ scale: 1.02, y: -2 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  New Order
-                </motion.button>
-              </motion.div>
-            )}
+              )}
+              <motion.button
+                className="btn btn-ghost"
+                onClick={handleNewOrder}
+                style={{ flex: hasCart ? 0 : 1, minWidth: hasCart ? 120 : undefined }}
+                whileHover={{ scale: 1.02, y: -2 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                {hasCart ? 'Clear & Restart' : 'New Order'}
+              </motion.button>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -478,6 +680,187 @@ export default function VoiceOrder() {
               </motion.button>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Floating Order Tab ── */}
+      <AnimatePresence>
+        {hasCart && !result?.confirmed && (
+          <>
+            {/* Floating toggle button */}
+            <motion.button
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+              onClick={() => setOrderTabOpen(prev => !prev)}
+              style={{
+                position: 'fixed', bottom: 24, right: 24, zIndex: 1000,
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '12px 20px', borderRadius: 'var(--radius-full)',
+                background: 'var(--accent)', color: 'white', border: 'none',
+                cursor: 'pointer', fontFamily: 'var(--font-body)',
+                fontSize: 14, fontWeight: 700,
+                boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+              }}
+              whileHover={{ scale: 1.05, y: -2 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <ShoppingCart size={18} />
+              <span>{cartItems.length} {cartItems.length === 1 ? 'item' : 'items'}</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder?.total || 0}</span>
+              {orderTabOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+
+              {/* Pulse badge on new item */}
+              <motion.span
+                key={cartItems.length}
+                initial={{ scale: 1.5, opacity: 1 }}
+                animate={{ scale: 1, opacity: 0 }}
+                transition={{ duration: 0.6 }}
+                style={{
+                  position: 'absolute', inset: 0, borderRadius: 'var(--radius-full)',
+                  border: '2px solid var(--accent)', pointerEvents: 'none',
+                }}
+              />
+            </motion.button>
+
+            {/* Slide-up order panel */}
+            <AnimatePresence>
+              {orderTabOpen && (
+                <motion.div
+                  initial={{ y: '100%', opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  exit={{ y: '100%', opacity: 0 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                  style={{
+                    position: 'fixed', bottom: 80, right: 24, zIndex: 999,
+                    width: 360, maxHeight: 'calc(100vh - 140px)',
+                    background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--radius-lg)',
+                    boxShadow: '0 8px 40px rgba(0,0,0,0.35)',
+                    display: 'flex', flexDirection: 'column',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Panel header */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-elevated)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <ShoppingCart size={16} style={{ color: 'var(--accent)' }} />
+                      <span style={{ fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-display)' }}>Current Order</span>
+                    </div>
+                    <button
+                      onClick={() => setOrderTabOpen(false)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2 }}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  {/* Items list */}
+                  <div style={{ overflowY: 'auto', flex: 1, padding: '8px 0' }}>
+                    {cartItems.map((item, idx) => (
+                      <motion.div
+                        key={item.item_id || idx}
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.04 }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '10px 16px',
+                          borderBottom: idx < cartItems.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                        }}
+                      >
+                        {/* Veg/Non-veg dot */}
+                        {item.is_veg !== undefined && (
+                          <span style={{
+                            width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                            background: item.is_veg ? '#22c55e' : '#ef4444',
+                          }} />
+                        )}
+
+                        {/* Item info */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {item.quantity}× {item.item_name || item.name}
+                          </div>
+                          {/* Modifier tags */}
+                          {item.modifiers && item.modifiers.spice_level && item.modifiers.spice_level !== 'medium' && (
+                            <span style={{
+                              fontSize: 10, padding: '1px 5px', borderRadius: 'var(--radius-full)',
+                              background: 'var(--warning-subtle)', color: 'var(--warning)',
+                            }}>🌶️ {item.modifiers.spice_level}</span>
+                          )}
+                        </div>
+
+                        {/* Price */}
+                        <span style={{ fontSize: 13, fontFamily: 'var(--font-mono)', fontWeight: 600, flexShrink: 0 }}>
+                          ₹{item.line_total}
+                        </span>
+
+                        {/* Remove btn */}
+                        <button
+                          onClick={() => handleRemoveItem(item.item_name || item.name)}
+                          disabled={loading}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: 'var(--text-muted)', padding: 2, flexShrink: 0,
+                            transition: 'color 0.2s',
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.color = 'var(--danger)'}
+                          onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
+                          title={`Remove ${item.item_name || item.name}`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </motion.div>
+                    ))}
+                  </div>
+
+                  {/* Totals footer */}
+                  {effectiveOrder && (
+                    <div style={{
+                      padding: '12px 16px', borderTop: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-elevated)',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 3 }}>
+                        <span>Subtotal</span>
+                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder.subtotal}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>
+                        <span>GST (5%)</span>
+                        <span style={{ fontFamily: 'var(--font-mono)' }}>₹{effectiveOrder.tax}</span>
+                      </div>
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        fontSize: 16, fontWeight: 800, fontFamily: 'var(--font-mono)',
+                        color: 'var(--accent)',
+                        borderTop: '1px solid var(--border-mid)', paddingTop: 8,
+                      }}>
+                        <span style={{ fontFamily: 'var(--font-body)' }}>Total</span>
+                        <span>₹{effectiveOrder.total}</span>
+                      </div>
+
+                      {/* Quick confirm button */}
+                      <motion.button
+                        className="btn btn-primary"
+                        onClick={handleConfirm}
+                        disabled={loading}
+                        style={{ width: '100%', marginTop: 10, fontSize: 13 }}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                      >
+                        {loading ? 'Confirming…' : `Confirm Order`}
+                      </motion.button>
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </>
         )}
       </AnimatePresence>
     </motion.div>

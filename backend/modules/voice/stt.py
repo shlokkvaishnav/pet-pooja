@@ -23,6 +23,7 @@ Requires: pip install faster-whisper torch + ffmpeg installed.
 
 import asyncio
 import os
+import re
 import subprocess
 import shutil
 import glob
@@ -156,6 +157,125 @@ _INITIAL_PROMPT = (
 )
 
 
+# ── Text-based language re-detection ─────────────────────────────
+# Whisper's audio-level detection is unreliable for short, mixed-language
+# (Hinglish) utterances. This re-detects from the actual transcript text.
+
+# Hindi/Hinglish markers — romanized Hindi words commonly used in orders
+_HINDI_MARKERS = re.compile(
+    r"\b("
+    r"ek|do|teen|char|paanch|chhe|saat|aath|nau|das"
+    r"|aur|ya|bhi|dena|lao|chahiye|de\s*do|milega|bhejo|rakh"
+    r"|bhaiya|bhai|boss|yaar|ji"
+    r"|haan|nahi|mat|theek|accha|bilkul|zaroor|sahi"
+    r"|kya|kuch|koi|kitna|kaisa"
+    r"|mujhe|mereko|humko|mujhko"
+    r"|wala|wali|wale"
+    r"|extra|zyada|kam|bina|thoda|bahut"
+    r"|lekin|magar|par|phir|abhi"
+    r"|hata|hatao|cancel|change|badlo"
+    r"|masala|tikka|naan|roti|dal|paneer|biryani|lassi|chai"
+    r"|kheer|raita|tandoori|kebab|makhani|gobhi|aloo|palak|shahi"
+    r"|sabzi|sabji|dahi|gosht|chawal"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Gujarati script detection (Unicode block: 0A80-0AFF)
+_GUJARATI_SCRIPT = re.compile(r"[\u0A80-\u0AFF]")
+
+# Devanagari script detection (Unicode block: 0900-097F)
+_DEVANAGARI_SCRIPT = re.compile(r"[\u0900-\u097F]")
+
+# Kannada script detection (Unicode block: 0C80-0CFF)
+_KANNADA_SCRIPT = re.compile(r"[\u0C80-\u0CFF]")
+
+# Pure English markers — words that strongly suggest English intent
+_ENGLISH_MARKERS = re.compile(
+    r"\b("
+    r"please|thank|want|give|order|need|would\s+like|can\s+i|get\s+me"
+    r"|remove|cancel|change|add|confirm|yes|no|okay"
+    r"|one|two|three|four|five|six|seven|eight|nine|ten"
+    r"|chicken|butter|extra|spicy|without"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Supported Whisper language codes to our 5 languages
+_WHISPER_LANG_MAP = {
+    "en": "en", "english": "en",
+    "hi": "hi", "hindi": "hi",
+    "gu": "gu", "gujarati": "gu",
+    "mr": "mr", "marathi": "mr",
+    "kn": "kn", "kannada": "kn",
+}
+
+
+def _redetect_language(transcript: str, whisper_lang: str, whisper_confidence: float) -> str:
+    """
+    Re-detect the language from the transcript text content.
+    Overrides Whisper's audio-level detection when text evidence is strong.
+
+    Strategy:
+    1. Native script present → use that script's language (definitive)
+    2. Hindi/Hinglish markers dominant → "hi"
+    3. Pure English with high Whisper confidence → "en"
+    4. Low Whisper confidence + Hindi markers → "hi" (Hinglish default)
+    5. Fall back to Whisper's detection if it maps to a supported language
+    6. Otherwise default to "en"
+    """
+    if not transcript or not transcript.strip():
+        return _WHISPER_LANG_MAP.get(whisper_lang, "en")
+
+    text = transcript.strip()
+
+    # 1. Native script detection (highest priority — definitive)
+    gujarati_chars = len(_GUJARATI_SCRIPT.findall(text))
+    devanagari_chars = len(_DEVANAGARI_SCRIPT.findall(text))
+    kannada_chars = len(_KANNADA_SCRIPT.findall(text))
+
+    if gujarati_chars > 3:
+        return "gu"
+    if kannada_chars > 3:
+        return "kn"
+    if devanagari_chars > 3:
+        # Devanagari could be Hindi or Marathi; prefer Whisper's guess
+        if whisper_lang in ("mr", "marathi"):
+            return "mr"
+        return "hi"
+
+    # 2. Count Hindi/Hinglish vs pure English word markers
+    hindi_hits = len(_HINDI_MARKERS.findall(text))
+    english_hits = len(_ENGLISH_MARKERS.findall(text))
+    word_count = max(len(text.split()), 1)
+
+    hindi_ratio = hindi_hits / word_count
+    english_ratio = english_hits / word_count
+
+    # Strong Hindi/Hinglish signal → "hi"
+    if hindi_hits >= 2 and hindi_ratio > english_ratio:
+        return "hi"
+
+    # Mixed — mostly Hindi markers present → "hi" (Hinglish is spoken as Hindi)
+    if hindi_hits >= 1 and whisper_confidence < 0.8:
+        return "hi"
+
+    # 3. High-confidence Whisper with pure English text → trust Whisper
+    if whisper_confidence >= 0.8 and english_ratio > 0.3 and hindi_hits == 0:
+        return "en"
+
+    # 4. Map Whisper's language to our supported set
+    mapped = _WHISPER_LANG_MAP.get(whisper_lang)
+    if mapped:
+        return mapped
+
+    # 5. Default fallback: if Hindi markers at all, say "hi"
+    if hindi_hits >= 1:
+        return "hi"
+
+    return "en"
+
+
 def _compute_segment_confidence(segments_list: list) -> tuple[str, float, list]:
     """
     Collect segments, compute per-segment avg_logprob, and derive
@@ -277,10 +397,21 @@ def transcribe(audio_path: str) -> dict:
     if transcribe_path != wav_path:
         _cleanup(transcribe_path)
 
+    # Step 6: Text-based language re-detection
+    whisper_lang = info.language
+    whisper_conf = info.language_probability
+    final_lang = _redetect_language(transcript.strip(), whisper_lang, whisper_conf)
+    if final_lang != whisper_lang:
+        logger.info(
+            "Language override: Whisper=%s (%.2f) → text-detected=%s | '%s'",
+            whisper_lang, whisper_conf, final_lang, transcript[:60],
+        )
+
     return {
         "transcript": transcript.strip(),
-        "detected_language": info.language,
-        "language_confidence": round(info.language_probability, 3),
+        "detected_language": final_lang,
+        "whisper_raw_language": whisper_lang,
+        "language_confidence": round(whisper_conf, 3),
         "transcription_confidence": overall_confidence,
         "is_low_confidence": is_low_confidence,
         "low_confidence_reason": low_confidence_reason,

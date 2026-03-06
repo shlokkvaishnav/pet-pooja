@@ -13,6 +13,7 @@ Usage:
 
 import asyncio
 import io
+import re
 import time
 import logging
 
@@ -23,11 +24,15 @@ logger = logging.getLogger("petpooja.voice.tts_engine")
 # ── Microsoft Edge Neural Voice IDs per language ──────────────────
 _VOICE_MAP = {
     "en": "en-IN-NeerjaNeural",      # Indian English female
-    "hi": "hi-IN-SwaraNeural",       # Hindi female
+    "hi": "hi-IN-SwaraNeural",       # Hindi female (Devanagari input)
+    "hi_roman": "en-IN-NeerjaNeural", # Hinglish / romanized Hindi → Indian English voice
     "gu": "gu-IN-DhwaniNeural",      # Gujarati female
     "mr": "mr-IN-AarohiNeural",      # Marathi female
     "kn": "kn-IN-SapnaNeural",       # Kannada female
 }
+
+# Devanagari Unicode range for script detection
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
 
 
 class IndicTTSEngine:
@@ -81,11 +86,27 @@ class IndicTTSEngine:
         except Exception as e:
             logger.error(f"Edge TTS warmup failed: {e}")
 
+    def _select_voice(self, text: str, language: str) -> str:
+        """Smart voice selection based on text script.
+
+        For Hindi: if text is mostly Latin (romanized Hindi / Hinglish),
+        use en-IN-NeerjaNeural which handles Hinglish naturally.
+        If text is Devanagari, use hi-IN-SwaraNeural.
+        """
+        if language == "hi":
+            devanagari_count = len(_DEVANAGARI_RE.findall(text))
+            total = max(len(text), 1)
+            if devanagari_count / total < 0.3:
+                # Mostly Latin / romanized Hindi → use Indian English voice
+                return _VOICE_MAP["hi_roman"]
+            return _VOICE_MAP["hi"]
+        return _VOICE_MAP.get(language, _VOICE_MAP["en"])
+
     async def _synthesize_async(self, text: str, language: str) -> bytes:
         """Async synthesis using edge-tts. Returns MP3 bytes."""
         import edge_tts
 
-        voice = _VOICE_MAP.get(language, _VOICE_MAP["en"])
+        voice = self._select_voice(text, language)
         communicate = edge_tts.Communicate(text, voice)
 
         mp3_buffer = io.BytesIO()

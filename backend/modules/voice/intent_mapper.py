@@ -202,6 +202,24 @@ def classify_intents(text: str) -> list[dict]:
     return results
 
 
+# ── Cancel-all detection ──
+_CANCEL_ALL_PATTERNS = [
+    r"\b(everything|every\s+thing|all|sab|sab\s+kuch|sara|saara|poora|pura|complete)\b",
+    r"\b(cancel\s+(?:the\s+)?order|order\s+cancel|reset|clear|start\s*over|shuru\s+se)\b",
+    r"\b(don'?t\s+want\s+anything|kuch\s+nahi|nahi\s+chahiye\s+kuch|sab\s+hata\s+do)\b",
+    r"\b(clear\s+(?:the\s+)?cart|empty\s+(?:the\s+)?cart|remove\s+(?:all|everything|sab))\b",
+]
+
+
+def is_cancel_all(text: str) -> bool:
+    """Check if a cancel utterance means 'cancel everything / clear the order'."""
+    text_lower = text.lower().strip()
+    for pattern in _CANCEL_ALL_PATTERNS:
+        if re.search(pattern, text_lower):
+            return True
+    return False
+
+
 _ORDER_START = re.compile(
     r"""
     (?:now\s+)?                              # optional "now"

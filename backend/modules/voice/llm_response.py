@@ -213,8 +213,17 @@ class LLMResponseGenerator:
             return self._t_order(lang, items)
 
         if intent == "CANCEL":
-            item_name = items[0]["item_name"] if items else "the item"
-            return self._t_cancel(lang, item_name)
+            if not items:
+                # No specific items → check if cart was cleared
+                session_items = pipeline_result.get("session_items", [])
+                if not session_items:
+                    return self._t_cancel_all(lang)
+                else:
+                    return self._t_cancel_clarify(lang)
+            if len(items) == 1:
+                return self._t_cancel(lang, items[0]["item_name"])
+            names = ", ".join(i["item_name"] for i in items)
+            return self._t_cancel(lang, names)
 
         if intent == "MODIFY":
             if items:
@@ -270,11 +279,33 @@ class LLMResponseGenerator:
     @staticmethod
     def _t_cancel(lang: str, item_name: str) -> str:
         templates = {
-            "en": f"Removed {item_name} from your order.",
-            "hi": f"{item_name} hata diya.",
-            "gu": f"{item_name} દૂર કર્યું.",
-            "mr": f"{item_name} काढले.",
-            "kn": f"{item_name} ತೆಗೆದುಹಾಕಲಾಗಿದೆ.",
+            "en": f"Done, removed {item_name}. Anything else?",
+            "hi": f"{item_name} hata diya. Aur kuch badalna hai?",
+            "gu": f"{item_name} દૂર કર્યું. બીજું કંઈ જોઈએ?",
+            "mr": f"{item_name} कढले. आणखी काही हवे का?",
+            "kn": f"{item_name} ತೆಗೆದುಹಾಕಲಾಗಿದೆ. ಇನ್ನೇನಾದರೂ ಬೇಕೇ?",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_cancel_all(lang: str) -> str:
+        templates = {
+            "en": "Order cleared. Would you like to start fresh?",
+            "hi": "Order clear ho gaya. Naya order shuru karein?",
+            "gu": "ઓર્ડર ક્લિયર થઈ ગયું. ફરીથી શરૂ કરશો?",
+            "mr": "ऑर्डर क्लियर केले. पुन्हा सुरू करायचे का?",
+            "kn": "ಆರ್ಡರ್ ಕ್ಲಿಯರ್ ಆಯಿತು. ಹೊಸದಾಗಿ ಶುರು ಮಾಡೋಣ?",
+        }
+        return templates.get(lang, templates["en"])
+
+    @staticmethod
+    def _t_cancel_clarify(lang: str) -> str:
+        templates = {
+            "en": "Which item should I remove? Say the item name.",
+            "hi": "Kaunsa item hatana hai? Item ka naam bolein.",
+            "gu": "કયું આઇટમ દૂર કરવું છે? આઇટમનું નામ બોલો.",
+            "mr": "कोणते आयटम काढायचे? आयटमचे नाव सांगा.",
+            "kn": "ಯಾವ ಐಟಂ ತೆಗೆದುಹಾಕಬೇಕು? ಐಟಂ ಹೆಸರು ಹೇಳಿ.",
         }
         return templates.get(lang, templates["en"])
 

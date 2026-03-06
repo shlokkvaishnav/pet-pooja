@@ -85,12 +85,14 @@ def _expand_order_ids(text: str) -> str:
     return text
 
 
-def _expand_small_numbers(text: str) -> str:
+def _expand_small_numbers(text: str, language: str = "en") -> str:
     """Convert lone small quantities (1–20) to words in spoken context.
-    Only converts isolated numbers that look like quantities, not prices."""
+    Only for English — other languages let TTS read digits natively."""
+    if language != "en":
+        return text  # Hindi TTS reads "2" as "do", Gujarati as "be", etc.
+
     def _replace_num(m):
         n = int(m.group(0))
-        # Only convert small quantities, not prices (prices are near 'rupees')
         if n in _NUM_WORDS:
             return _NUM_WORDS[n]
         return m.group(0)
@@ -244,14 +246,13 @@ def normalize(text: str, language: str, pipeline_result: dict) -> str:
     text = _expand_acronyms(text)
 
     # Step 6: Small numbers to words (after currency so "340 rupees" stays)
-    text = _expand_small_numbers(text)
+    # Only for English — non-English TTS voices read digits natively
+    text = _expand_small_numbers(text, language)
 
-    # Step 7: Script conversion for Indian languages
-    if language in _SCRIPT_MAP:
-        # Protect English menu item names from transliteration
-        text, placeholder_map = _protect_menu_items(text, pipeline_result)
-        text = _convert_script(text, language)
-        text = _restore_menu_items(text, placeholder_map)
+    # Step 7: Script conversion — DISABLED
+    # Templates already output native scripts for gu/mr/kn and romanized
+    # Hindi for hi. ITRANS conversion garbles casual romanized Hindi.
+    # The TTS engine handles voice selection based on text script instead.
 
     # Step 8: Breathing punctuation
     text = _add_breathing_punctuation(text)
