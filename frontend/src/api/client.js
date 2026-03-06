@@ -110,6 +110,9 @@ export const submitTextOrder = (text, sessionId) =>
 export const confirmOrder = (order, kot) =>
   api.post('/voice/confirm-order', { order, kot }).then(r => r.data)
 
+export const speakText = (text, language = 'en') =>
+  api.post('/voice/speak', { text, language }).then(r => r.data)
+
 // ── Health ──
 
 export const getVoiceOrders = () =>

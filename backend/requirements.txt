@@ -35,6 +35,16 @@ faiss-cpu>=1.8.0
 # Audio handling
 pydub
 
+# TTS — Edge TTS (Microsoft neural voices, supports Indian languages)
+# No model downloads needed — uses Microsoft Edge's TTS service
+edge-tts>=7.0.0
+
+# TTS text normalization — script conversion for Indian languages
+indic-transliteration>=2.3.0
+
+# LLM integration — async HTTP client for Ollama
+httpx>=0.27.0
+
 # Session persistence — Redis preferred, DB fallback built-in
 redis>=5.0.0
 

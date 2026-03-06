@@ -78,7 +78,7 @@ class VoiceConfig:
     # Minimum confidence per sliding-window size (3-word, 2-word, 1-word)
     ITEM_MATCH_MIN_CONF_3W: float     = _env_float("ITEM_MATCH_MIN_CONF_3W", 0.85)
     ITEM_MATCH_MIN_CONF_2W: float     = _env_float("ITEM_MATCH_MIN_CONF_2W", 0.78)
-    ITEM_MATCH_MIN_CONF_1W: float     = _env_float("ITEM_MATCH_MIN_CONF_1W", 0.75)
+    ITEM_MATCH_MIN_CONF_1W: float     = _env_float("ITEM_MATCH_MIN_CONF_1W", 0.90)
 
     # ─── Quantity Extractor (quantity_extractor.py) ────────────────
     QTY_WINDOW_BEFORE: int        = _env_int("QTY_WINDOW_BEFORE", 3)
@@ -102,6 +102,20 @@ class VoiceConfig:
     UPSELL_RELATED_ORDERS_LIMIT: int = _env_int("UPSELL_RELATED_ORDERS_LIMIT", 500)
     UPSELL_CO_ITEMS_LIMIT: int    = _env_int("UPSELL_CO_ITEMS_LIMIT", 20)
     UPSELL_FALLBACK_MARGIN: float = _env_float("UPSELL_FALLBACK_MARGIN", 60.0)
+
+    # ─── TTS (Edge TTS — Microsoft neural voices for Indian languages) ───
+    TTS_ENABLED: bool             = _env_bool("TTS_ENABLED", True)
+    TTS_OUTPUT_FORMAT: str        = _env("TTS_OUTPUT_FORMAT", "mp3")
+    TTS_OUTPUT_BITRATE: str       = _env("TTS_OUTPUT_BITRATE", "128k")
+
+    # ─── LLM (Qwen2.5:7B via Ollama — summarization + natural phrasing) ─
+    LLM_ENABLED: bool             = _env_bool("LLM_ENABLED", True)
+    LLM_BASE_URL: str             = _env("LLM_BASE_URL", "http://localhost:11434")
+    LLM_MODEL: str                = _env("LLM_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+    LLM_TIMEOUT_SEC: float        = _env_float("LLM_TIMEOUT_SEC", 2.5)
+    LLM_MAX_TOKENS: int           = _env_int("LLM_MAX_TOKENS", 60)
+    LLM_TEMPERATURE: float        = _env_float("LLM_TEMPERATURE", 0.4)
+    LLM_MIN_ITEMS_FOR_SUMMARY: int = _env_int("LLM_MIN_ITEMS_FOR_SUMMARY", 5)
 
 
 # Module-level singleton — import this everywhere

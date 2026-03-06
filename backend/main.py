@@ -56,6 +56,37 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Semantic model warmup failed (will lazy-load on first use): {e}")
 
+    # -- PRE-LOAD: Warm up Indic Parler TTS engine --
+    try:
+        from modules.voice.voice_config import cfg as voice_cfg
+        if voice_cfg.TTS_ENABLED:
+            from modules.voice.tts_engine_indic import indic_engine
+            indic_engine.warmup()
+        else:
+            logger.info("TTS is disabled via config — skipping warmup")
+    except Exception as e:
+        logger.warning(f"TTS engine warmup failed (TTS will be unavailable): {e}")
+
+    # -- VERIFY: Ollama LLM reachability --
+    try:
+        from modules.voice.voice_config import cfg as voice_cfg
+        if voice_cfg.LLM_ENABLED:
+            import httpx
+            try:
+                resp = httpx.get(f"{voice_cfg.LLM_BASE_URL}/api/tags", timeout=3.0)
+                if resp.status_code == 200:
+                    models = [m.get("name", "") for m in resp.json().get("models", [])]
+                    logger.info(f"Ollama reachable — available models: {models}")
+                else:
+                    logger.warning(f"Ollama responded with status {resp.status_code}")
+            except Exception as e:
+                logger.warning(f"Ollama not reachable at {voice_cfg.LLM_BASE_URL}: {e}")
+                logger.warning("LLM summarization will use template fallbacks")
+        else:
+            logger.info("LLM is disabled via config — skipping Ollama check")
+    except Exception as e:
+        logger.warning(f"Ollama check failed: {e}")
+
     # -- DYNAMIC: Load menu from DATABASE --
     db = SessionLocal()
     try:
@@ -202,13 +233,42 @@ def reload_menu(db=Depends(get_db)):
 
 @app.get("/api/health")
 def health():
-    """Health check endpoint."""
-    return {
+    """Health check endpoint with TTS + LLM status."""
+    result = {
         "status": "healthy",
         "service": "petpooja-ai-copilot",
         "version": "0.2.0",
         "pipeline_loaded": getattr(app.state, "voice_pipeline", None) is not None,
     }
+
+    # TTS status
+    try:
+        from modules.voice.voice_config import cfg as voice_cfg
+        if voice_cfg.TTS_ENABLED:
+            from modules.voice.tts_engine_indic import indic_engine
+            result["tts"] = indic_engine.get_status()
+        else:
+            result["tts"] = {"status": "disabled"}
+    except Exception:
+        result["tts"] = {"status": "error"}
+
+    # LLM status
+    try:
+        from modules.voice.voice_config import cfg as voice_cfg
+        if voice_cfg.LLM_ENABLED:
+            result["llm"] = {
+                "status": "configured",
+                "model": voice_cfg.LLM_MODEL,
+                "backend": "ollama",
+                "base_url": voice_cfg.LLM_BASE_URL,
+                "used_for": ["complex_order_summary", "upsell", "query", "ambiguous_3plus"],
+            }
+        else:
+            result["llm"] = {"status": "disabled"}
+    except Exception:
+        result["llm"] = {"status": "error"}
+
+    return result
 
 
 @app.get("/health")

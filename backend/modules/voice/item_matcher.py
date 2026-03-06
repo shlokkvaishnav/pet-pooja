@@ -42,6 +42,8 @@ SKIP_WORDS = {"aur", "and", "or", "ya", "bhi", "with", "dena", "lao",
               "it", "is", "a", "an", "for", "get", "give", "want", "need",
               "bring", "make", "put", "take", "also", "just", "some",
               "more", "less", "big", "small", "large", "plate", "glass",
+              "if", "have", "now", "tell", "show", "say", "said",
+              "suggest", "recommend",
               # Hinglish fillers
               "miya", "mia", "bhai", "milay", "kiya", "uske", "saath", "bhi",
               "chahiye", "mat", "maat", "nahi", "ek", "do", "teen",
@@ -50,6 +52,10 @@ SKIP_WORDS = {"aur", "and", "or", "ya", "bhi", "with", "dena", "lao",
               "kuch", "sab", "wala", "wali", "wale",
               "e", "hi", "yeh", "woh", "kya",
               "jara", "zara", "deena", "na", "toh", "bas",
+              # Common Hindi non-food words that phonetically resemble food items
+              "niche", "upar", "oppar", "makaan", "makan", "dukan",
+              "dhukaan", "dhukan", "dhuka", "lehne", "tayyar", "tayyya",
+              "randi", "niche", "uper", "andar", "bahar",
               # Devanagari equivalents (fallback if transliteration missed)
               "और", "या", "भी", "देना", "दे", "लाओ", "चाहिए",
               "भैया", "भइया", "भाई", "जी", "हाँ", "हां"}
@@ -510,6 +516,13 @@ def extract_all_items(text: str, corpus: dict) -> list:
     # (safely lowered from 0.90 because word-in-corpus fallback is precise)
     MIN_CONF = {3: cfg.ITEM_MATCH_MIN_CONF_3W, 2: cfg.ITEM_MATCH_MIN_CONF_2W, 1: cfg.ITEM_MATCH_MIN_CONF_1W}
 
+    # Track which tokens are consumed by multi-word matches (2+),
+    # so we can suppress single-word matches whose token is a substring
+    # of an already-matched multi-word item name.
+    # E.g. "butter" alone → Butter (Extra), but "butter naan" → Butter Naan;
+    # the standalone "butter" should be suppressed.
+    multiword_tokens: set = set()   # token positions consumed by 2+ word windows
+
     for window_size in [3, 2, 1]:
         min_confidence = MIN_CONF[window_size]
 
@@ -526,8 +539,41 @@ def extract_all_items(text: str, corpus: dict) -> list:
             if match and match["confidence"] >= min_confidence:
                 item_id = match["item_id"]
                 if item_id not in found or match["confidence"] > found[item_id]["confidence"]:
-                    found[item_id] = {**match, "position": i}
+                    found[item_id] = {**match, "position": i, "_window": window_size}
                     used_positions.update(window_positions)
+                    if window_size >= 2:
+                        multiword_tokens.update(window_positions)
+
+    # --- Post-filter: suppress single-word component matches ---
+    # If a single-word match (window=1) uses a token that is a component word
+    # of an already-matched multi-word item, suppress it.
+    # This prevents "butter" → Butter(Extra) when "butter naan" → Butter Naan
+    # already captured the intended item.
+    if multiword_tokens:
+        # Collect the individual words from all multi-word matched aliases
+        multiword_alias_words: set = set()
+        for item_data in found.values():
+            if item_data.get("_window", 1) >= 2:
+                multiword_alias_words.update(item_data["matched_as"].lower().split())
+
+        ids_to_remove = []
+        for item_id, item_data in found.items():
+            if item_data.get("_window", 1) == 1:
+                # The single word that was matched
+                single_word = tokens[item_data["position"]].lower()
+                # Check if this word appears in any multi-word match's alias
+                if single_word in multiword_alias_words:
+                    logger.debug(
+                        "Suppressing component match: '%s' -> %s (absorbed by multi-word match)",
+                        single_word, item_data.get("matched_as"),
+                    )
+                    ids_to_remove.append(item_id)
+        for item_id in ids_to_remove:
+            del found[item_id]
+
+    # Clean up internal tracking keys
+    for item_data in found.values():
+        item_data.pop("_window", None)
 
     result = sorted(found.values(), key=lambda x: x["position"])
 

@@ -18,6 +18,7 @@ from api.deps import get_voice_pipeline
 from database import get_db
 from models import Order
 from modules.voice.order_builder import build_order, generate_kot, save_order_to_db
+from modules.voice.voice_config import cfg
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.voice")
@@ -35,6 +36,11 @@ class TextInput(BaseModel):
 class ConfirmOrderInput(BaseModel):
     order: dict
     kot: dict | None = None
+
+
+class SpeakInput(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    language: str = Field(default="en", pattern=r"^(en|hi|gu|mr|kn)$")
 
 
 async def _save_audio_temp(audio: UploadFile) -> str:
@@ -138,7 +144,23 @@ async def process_audio(
     """
     audio_path = await _save_audio_temp(audio)
     try:
-        return pipeline.process_audio(audio_path, session_id=session_id)
+        result = pipeline.process_audio(audio_path, session_id=session_id)
+
+        # TTS enhancement — non-blocking, degrades gracefully on failure
+        tts_result = {"audio_b64": None, "spoken_text": None, "language": result.get("detected_language", "en")}
+        if cfg.TTS_ENABLED:
+            try:
+                from modules.voice.tts import tts_orchestrator
+                detected_lang = result.get("detected_language", "en")
+                tts_result = await tts_orchestrator.get_audio_response(result, detected_lang)
+            except Exception as e:
+                logger.warning(f"TTS enhancement failed: {e}")
+
+        result["tts_audio_b64"] = tts_result["audio_b64"]
+        result["tts_text"] = tts_result["spoken_text"]
+        result["tts_language"] = tts_result["language"]
+
+        return result
     except FileNotFoundError:
         logger.exception("Audio file not found during processing")
         raise HTTPException(status_code=400, detail="Audio file could not be read")
@@ -158,7 +180,7 @@ async def process_audio(
 # ── 3. POST /api/voice/process ──
 
 @router.post("/process")
-def process_text(
+async def process_text(
     body: TextInput,
     pipeline=Depends(get_voice_pipeline),
 ):
@@ -168,13 +190,58 @@ def process_text(
     Returns: same as /process-audio but from text input
     """
     try:
-        return pipeline.process_text(body.text, session_id=body.session_id)
+        result = pipeline.process_text(body.text, session_id=body.session_id)
+
+        # TTS enhancement — non-blocking, degrades gracefully on failure
+        tts_result = {"audio_b64": None, "spoken_text": None, "language": result.get("detected_language", "en")}
+        if cfg.TTS_ENABLED:
+            try:
+                from modules.voice.tts import tts_orchestrator
+                detected_lang = result.get("detected_language", "en")
+                tts_result = await tts_orchestrator.get_audio_response(result, detected_lang)
+            except Exception as e:
+                logger.warning(f"TTS enhancement failed: {e}")
+
+        result["tts_audio_b64"] = tts_result["audio_b64"]
+        result["tts_text"] = tts_result["spoken_text"]
+        result["tts_language"] = tts_result["language"]
+
+        return result
     except ValueError as e:
         logger.exception("Text parsing error")
         raise HTTPException(status_code=422, detail=f"Could not parse order: {e}")
     except Exception as e:
         logger.exception("Text processing failed")
         raise HTTPException(status_code=500, detail=f"Text processing failed: {e}")
+
+
+# ── 3b. POST /api/voice/speak ──
+
+@router.post("/speak")
+@_limiter.limit("30/minute")
+async def speak_text(
+    request: Request,
+    body: SpeakInput,
+):
+    """
+    Text + language → TTS audio.
+    Use cases: re-play last response, read upsell banners, price recommendations.
+    Returns: {audio_b64, text}
+    """
+    if not cfg.TTS_ENABLED:
+        raise HTTPException(status_code=503, detail="TTS is disabled")
+
+    try:
+        from modules.voice.tts import tts_orchestrator
+        result = await tts_orchestrator.speak_text(body.text, body.language)
+        if result["audio_b64"] is None:
+            raise HTTPException(status_code=503, detail="TTS engine not ready")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("speak_text failed")
+        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {e}")
 
 
 # ── 4. POST /api/voice/confirm-order ──

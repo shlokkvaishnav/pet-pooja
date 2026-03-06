@@ -202,25 +202,54 @@ def classify_intents(text: str) -> list[dict]:
     return results
 
 
+_ORDER_START = re.compile(
+    r"""
+    (?:now\s+)?                              # optional "now"
+    (?:
+        give\s+me
+      | i\s+(?:want|need|would\s+like)
+      | (?:mujhe|mujhko|mereko|humko)\s*(?:de(?:do|na)?|chahiye|lao)?
+      | please\s+(?:give|get|bring)
+      | (?:can|could)\s+(?:i|you)\s+(?:get|have|order)
+      | let\s+me\s+(?:have|order|get)
+      | i(?:'d|\s+would)\s+like
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
 def _split_clauses(text: str) -> list[str]:
     """
     Split an utterance into clauses at conjunction/punctuation boundaries.
-    Preserves clause text for downstream item matching.
+    Also splits at order-start phrases (e.g. "give me", "now give me")
+    so non-food preamble doesn't contaminate item matching.
 
     Only splits if the result would yield multiple non-trivial fragments.
     """
-    parts = _CLAUSE_SPLITTERS.split(text)
-    # Keep only non-empty, non-whitespace fragments
-    clauses = [p.strip() for p in parts if p and p.strip()]
+    # --- Phase 0: split at order-start phrases ---
+    # If "give me" / "now give me" etc. appears mid-sentence, treat it as
+    # a clause boundary so everything before it (non-food chatter) is isolated.
+    segments = [text.strip()]
+    m = _ORDER_START.search(text)
+    if m and m.start() > 3:       # at least a few chars of preamble before it
+        preamble = text[:m.start()].strip()
+        order_part = text[m.start():].strip()
+        if preamble and order_part:
+            segments = [preamble, order_part]
 
-    # Don't split if it would produce only 1 clause (or empty)
-    if len(clauses) <= 1:
-        return [text.strip()]
+    # --- Phase 1: apply conjunction/punctuation splitting to each segment ---
+    all_clauses: list[str] = []
+    for seg in segments:
+        parts = _CLAUSE_SPLITTERS.split(seg)
+        clauses = [p.strip() for p in parts if p and p.strip()]
+        if len(clauses) <= 1:
+            all_clauses.append(seg.strip())
+        else:
+            substantial = [c for c in clauses if len(c.split()) >= 2]
+            if len(substantial) < 2:
+                all_clauses.append(seg.strip())
+            else:
+                all_clauses.extend(clauses)
 
-    # Don't split if any fragment is too short to be meaningful (< 2 words)
-    # unless we have at least 2 substantial clauses
-    substantial = [c for c in clauses if len(c.split()) >= 2]
-    if len(substantial) < 2:
-        return [text.strip()]
-
-    return clauses
+    return all_clauses if all_clauses else [text.strip()]
