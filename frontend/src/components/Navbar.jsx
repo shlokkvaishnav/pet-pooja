@@ -72,27 +72,7 @@ export default function Navbar() {
                 >
                     {t('nav_product')}
                 </a>
-                <a
-                    href="/#features"
-                    className="lp-nav-link"
-                    onClick={(e) => { e.preventDefault(); goToSection('features') }}
-                >
-                    FEATURES
-                </a>
-                <a
-                    href="/#pricing"
-                    className="lp-nav-link"
-                    onClick={(e) => { e.preventDefault(); goToSection('pricing') }}
-                >
-                    PRICING
-                </a>
-                <a
-                    href="/product"
-                    className="lp-nav-link"
-                    onClick={(e) => { e.preventDefault(); navigate('/product') }}
-                >
-                    DOCS
-                </a>
+
                 <a
                     href="/about"
                     className="lp-nav-link"

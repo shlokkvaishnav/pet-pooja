@@ -3,10 +3,10 @@
 
 :root {
   /* ── Backgrounds ── */
-  --bg-base: #0F0F14;
-  --bg-surface: #17171F;
-  --bg-elevated: #1E1E28;
-  --bg-overlay: #25252F;
+  --bg-base: #000000;
+  --bg-surface: #000000;
+  --bg-elevated: #000000;
+  --bg-overlay: #111111;
 
   /* ── Borders ── */
   --border-subtle: #2A2A36;
@@ -860,18 +860,16 @@ body {
 .lp-cta-pill {
   align-self: flex-start;
   margin-top: 48px;
-  background: linear-gradient(135deg, #d4291f, #ff6b35);
-  /* Bright orange/red default */
+  background: transparent;
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: none;
+  border: 1.5px solid var(--accent);
   border-radius: 100px;
-  /* Highly rounded */
   padding: 16px 28px;
   display: inline-flex;
   align-items: center;
   gap: 16px;
-  color: #fff;
+  color: var(--accent);
   font-family: var(--font);
   font-size: 11px;
   font-weight: 800;
@@ -879,18 +877,20 @@ body {
   text-transform: uppercase;
   cursor: pointer;
   transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
-  box-shadow: 0 8px 32px rgba(212, 41, 31, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: none;
 }
 
 .lp-cta-pill svg {
-  color: #fff;
+  color: inherit;
   transition: all 0.3s;
 }
 
 .lp-cta-pill:hover {
   transform: translateY(-2px) scale(1.02);
-  box-shadow: 0 16px 40px rgba(212, 41, 31, 0.5);
-  filter: brightness(1.1);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: none;
+  filter: none;
 }
 
 .lp-cta-pill:hover svg {
@@ -1829,47 +1829,42 @@ body {
   z-index: 10;
   display: flex;
   flex-direction: column;
-  transition: width 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 400ms cubic-bezier(0.25, 1, 0.5, 1);
+  /* Smoother transition */
   overflow-x: visible;
   overflow-y: hidden;
 }
 
+/* Vertical Dock Style for Collapsed Sidebar */
 .sidebar--collapsed {
-  width: 64px;
+  width: 68px;
+  top: 24px;
+  bottom: 24px;
+  left: 16px;
+  border-radius: 24px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  overflow: visible;
+  /* CRITICAL: allow tooltips outside */
 }
 
 /* Brand */
 .sidebar-brand {
-  padding: 8px 12px 10px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border-subtle);
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+  transition: all 0.3s;
 }
 
-.sidebar-brand-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 2px 4px;
-}
-
-.sidebar-logo {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-  box-shadow: 0 2px 8px rgba(200, 69, 10, 0.3);
-}
-
-.sidebar-logo-letter {
-  font-family: var(--font-display);
-  font-size: 16px;
-  font-weight: 900;
-  color: #fff;
+.sidebar--collapsed .sidebar-brand {
+  opacity: 0;
+  pointer-events: none;
+  padding: 0;
+  height: 20px;
+  margin: 0;
 }
 
 .sidebar-brand-text {
@@ -1920,7 +1915,21 @@ body {
   padding: 0 var(--space-2);
   flex: 1;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: visible;
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE 10+ */
+}
+
+.nav-links::-webkit-scrollbar {
+  display: none;
+  /* Chrome, Safari, Opera */
+}
+
+/* Ensure no overflow restrictions when collapsed for dock tooltips */
+.sidebar--collapsed .nav-links {
+  overflow: visible;
 }
 
 .nav-links li a {
@@ -1937,7 +1946,6 @@ body {
   transition: all var(--transition-fast);
   position: relative;
   white-space: nowrap;
-  overflow: hidden;
   height: 42px;
 }
 
@@ -2052,13 +2060,14 @@ body {
   flex: 1;
   padding: var(--space-10) var(--space-8);
   min-height: 100vh;
-  max-width: calc(1280px + 240px);
-  transition: margin-left 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  max-width: calc(1440px + 240px);
+  transition: all 400ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .main-content--expanded {
-  margin-left: 64px;
-  max-width: calc(1280px + 64px);
+  margin-left: 100px;
+  /* Adjusted for floating dock's left margin + width */
+  max-width: calc(1440px + 100px);
 }
 
 .sidebar--collapsed .sidebar-brand {
@@ -2077,12 +2086,30 @@ body {
   justify-content: center;
   gap: 0;
   padding: 0;
-  border-radius: 10px;
-  height: 40px;
+  border-radius: 12px;
+  height: 44px;
+  width: 44px;
+  margin: 4px auto;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.sidebar--collapsed .nav-links li a:hover {
+  background: rgba(255, 255, 255, 0.08);
+  transform: scale(1.15) translateX(4px);
+  border-color: rgba(255, 255, 255, 0.15);
+  z-index: 10;
 }
 
 .sidebar--collapsed .nav-icon {
   width: 20px;
+  transition: transform 0.3s ease;
+}
+
+.sidebar--collapsed .nav-links li a:hover .nav-icon {
+  transform: scale(1.1);
+  color: #fff;
 }
 
 .sidebar--collapsed .sidebar-footer {
@@ -2091,11 +2118,13 @@ body {
 }
 
 .sidebar--collapsed .sidebar-toggle {
-  width: 36px;
-  min-width: 36px;
-  min-height: 36px;
-  margin: 0 auto 12px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0 auto 16px;
   padding: 0;
+  border: none;
+  background: transparent;
 }
 
 .sidebar--collapsed .sidebar-toggle-label {
@@ -2109,28 +2138,28 @@ body {
 .sidebar--collapsed .nav-link--icon-only::after {
   content: attr(data-tooltip);
   position: absolute;
-  left: calc(100% + 12px);
+  left: calc(100% + 16px);
   top: 50%;
-  transform: translateY(-50%);
-  background: rgba(12, 12, 14, 0.96);
+  transform: translateY(-50%) translateX(-8px);
+  background: #000;
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  border: 1.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 120ms ease;
-  transition-delay: 180ms;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
   z-index: 30;
 }
 
 .sidebar--collapsed .nav-link--icon-only:hover::after {
   opacity: 1;
+  transform: translateY(-50%) translateX(0);
 }
 
 .dashboard-voice-fab {
@@ -3478,9 +3507,17 @@ body {
 }
 
 @keyframes reportsPulse {
-  0% { box-shadow: 0 0 0 0 rgba(232, 93, 42, 0.45); }
-  70% { box-shadow: 0 0 0 8px rgba(232, 93, 42, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(232, 93, 42, 0); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(232, 93, 42, 0.45);
+  }
+
+  70% {
+    box-shadow: 0 0 0 8px rgba(232, 93, 42, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(232, 93, 42, 0);
+  }
 }
 
 .reports-heatmap-wrap {
@@ -4295,6 +4332,7 @@ a:focus-visible {
 }
 
 @media (max-width: 768px) {
+
   .orders-filters-row,
   .tables-filters-row {
     grid-template-columns: 1fr;
@@ -5344,6 +5382,7 @@ a:focus-visible {
 }
 
 @media (max-width: 1024px) {
+
   .lp-how-grid,
   .lp-core-features,
   .lp-testimonials-grid,

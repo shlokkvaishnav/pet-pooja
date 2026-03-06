@@ -52,24 +52,15 @@ export default function DashboardLayout() {
       >
         {/* Brand */}
         <div className="sidebar-brand">
-          <div className="sidebar-brand-row">
-            <div className="sidebar-logo">
-              <span className="sidebar-logo-letter">
-                {(restaurant?.restaurant_name || restaurant?.name || 'R').charAt(0).toUpperCase()}
-              </span>
-            </div>
-            {open && (
-              <motion.div
-                className="sidebar-brand-text"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.2 }}
-              >
-                <div className="sidebar-brand-kicker">Sizzle</div>
-                <h2>{restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}</h2>
-              </motion.div>
-            )}
-          </div>
+          <motion.div
+            className="sidebar-brand-text"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="sidebar-brand-kicker">Sizzle</div>
+            <h2>{restaurant?.restaurant_name || restaurant?.name || 'Restaurant'}</h2>
+          </motion.div>
         </div>
 
         {/* Nav items */}
