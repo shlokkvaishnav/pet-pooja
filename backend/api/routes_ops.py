@@ -108,7 +108,16 @@ def get_orders(
         status_map = {s: c for s, c in status_counts}
 
         orders = (
-            db.query(Order)
+            db.query(
+                Order.order_id,
+                Order.order_number,
+                Order.total_amount,
+                Order.status,
+                Order.order_type,
+                Order.table_number,
+                Order.source,
+                Order.created_at,
+            )
             .filter(*filters)
             .order_by(desc(Order.created_at))
             .offset(offset)

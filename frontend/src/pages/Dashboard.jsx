@@ -42,11 +42,27 @@ export default function Dashboard() {
   const [customerReturns, setCustomerReturns] = useState(null)
   const [menuComplexity, setMenuComplexity] = useState([])
   const [showHealthBreakdown, setShowHealthBreakdown] = useState(false)
+  const [secondaryLoaded, setSecondaryLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let active = true
+
+    // Load critical metrics first so the page can render quickly.
+    getDashboardMetrics()
+      .then((m) => {
+        if (!active) return
+        setMetrics(m)
+      })
+      .catch(err => {
+        console.error('Dashboard load failed:', err)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    // Load secondary datasets in the background.
     Promise.all([
-      getDashboardMetrics(),
       getHiddenStars().catch(() => ({ items: [] })),
       getRisks().catch(() => ({ items: [] })),
       getCategoryBreakdown().catch(() => ({ categories: [] })),
@@ -59,8 +75,8 @@ export default function Dashboard() {
       getCustomerReturns().catch(() => null),
       getMenuComplexity().catch(() => ({ categories: [] })),
     ])
-      .then(([m, hs, ri, cb, tr, wm, el, cn, ps, wa, cr, mc]) => {
-        setMetrics(m)
+      .then(([hs, ri, cb, tr, wm, el, cn, ps, wa, cr, mc]) => {
+        if (!active) return
         setHiddenStars((hs.items || hs || []).slice(0, 5))
         setRiskItems((ri.items || ri || []).slice(0, 5))
         setCategoryData(cb.categories || cb || [])
@@ -73,8 +89,13 @@ export default function Dashboard() {
         setCustomerReturns(cr)
         setMenuComplexity(mc.categories || [])
       })
-      .catch(err => console.error('Dashboard load failed:', err))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (active) setSecondaryLoaded(true)
+      })
+
+    return () => {
+      active = false
+    }
   }, [])
 
   if (loading) {
@@ -161,6 +182,14 @@ export default function Dashboard() {
           ))}
         </div>
       </motion.div>
+
+      {!secondaryLoaded && (
+        <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+          <div className="card-body" style={{ fontSize: 12, color: 'var(--text-muted)', padding: 'var(--space-3) var(--space-5)' }}>
+            Loading advanced insights...
+          </div>
+        </div>
+      )}
 
       {/* Zone 2: Alert Rail */}
       {alerts.length > 0 && (

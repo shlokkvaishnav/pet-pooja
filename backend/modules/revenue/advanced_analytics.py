@@ -33,6 +33,7 @@ def analyze_category_cannibalization(db: Session, lookback_days: int = 90) -> li
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=lookback_days)
+    cutoff_naive = cutoff.replace(tzinfo=None)
 
     categories = db.query(Category).filter(Category.is_active.is_(True)).all()
     results = []
@@ -43,14 +44,29 @@ def analyze_category_cannibalization(db: Session, lookback_days: int = 90) -> li
             continue
 
         # Identify newer items (created within lookback)
-        newer_items = [i for i in items if i.created_at and i.created_at >= cutoff]
-        older_items = [i for i in items if not i.created_at or i.created_at < cutoff]
+        newer_items = [
+            i for i in items
+            if i.created_at and (
+                (i.created_at.tzinfo is None and i.created_at >= cutoff_naive) or
+                (i.created_at.tzinfo is not None and i.created_at >= cutoff)
+            )
+        ]
+        older_items = [
+            i for i in items
+            if (not i.created_at) or (
+                (i.created_at.tzinfo is None and i.created_at < cutoff_naive) or
+                (i.created_at.tzinfo is not None and i.created_at < cutoff)
+            )
+        ]
 
         if not newer_items or not older_items:
             continue
 
         for new_item in newer_items:
-            new_added = new_item.created_at or cutoff
+            if new_item.created_at and new_item.created_at.tzinfo is None:
+                new_added = new_item.created_at.replace(tzinfo=timezone.utc)
+            else:
+                new_added = new_item.created_at or cutoff
 
             for old_item in older_items:
                 # Compare old item sales before vs after new item launch
@@ -341,9 +357,10 @@ def calculate_menu_complexity(db: Session) -> list[dict]:
     results = []
     for cat_id, cat_name, item_count in categories:
         # Get per-item avg sales in this category
-        avg_item_sales = (
+        item_sales = (
             db.query(
-                func.avg(func.coalesce(func.sum(SaleTransaction.quantity), 0))
+                MenuItem.id.label("item_id"),
+                func.coalesce(func.sum(SaleTransaction.quantity), 0).label("qty"),
             )
             .select_from(MenuItem)
             .outerjoin(SaleTransaction, SaleTransaction.item_id == MenuItem.id)
@@ -355,7 +372,7 @@ def calculate_menu_complexity(db: Session) -> list[dict]:
             .subquery()
         )
 
-        overall_avg = db.query(func.avg(avg_item_sales.c[0])).scalar() or 0
+        overall_avg = db.query(func.avg(item_sales.c.qty)).scalar() or 0
 
         if item_count <= OPTIMAL_ITEMS:
             complexity = "optimal"

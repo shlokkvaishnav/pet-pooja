@@ -16,20 +16,38 @@ export default function MenuAnalysis() {
   const [data, setData] = useState(null)
   const [trends, setTrends] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [trendsLoading, setTrendsLoading] = useState(true)
   const [quadrantFilter, setQuadrantFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
 
   useEffect(() => {
-    Promise.all([
-      getMenuMatrix(),
-      getTrends().catch(() => null),
-    ])
-      .then(([matrixData, trendsData]) => {
+    let active = true
+
+    // Render page as soon as matrix data is ready.
+    getMenuMatrix()
+      .then((matrixData) => {
+        if (!active) return
         setData(matrixData)
-        setTrends(trendsData)
       })
       .catch(err => console.error('Menu Matrix failed:', err))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+
+    // Load trend enrichments in the background.
+    getTrends()
+      .then((trendsData) => {
+        if (!active) return
+        setTrends(trendsData)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setTrendsLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
   }, [])
 
   if (loading) {
@@ -91,6 +109,14 @@ export default function MenuAnalysis() {
           <p className="app-hero-sub">BCG matrix classification with trend analysis.</p>
         </div>
       </motion.div>
+
+      {trendsLoading && (
+        <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+          <div className="card-body" style={{ fontSize: 12, color: 'var(--text-muted)', padding: 'var(--space-3) var(--space-5)' }}>
+            Loading trend overlays...
+          </div>
+        </div>
+      )}
 
       {/* Quadrant stat pills */}
       <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', marginBottom: 'var(--space-6)' }}>

@@ -8,23 +8,34 @@ export default function ComboEngine() {
   const [combos, setCombos] = useState([])
   const [prices, setPrices] = useState([])
   const [loading, setLoading] = useState(true)
+  const [pricesLoading, setPricesLoading] = useState(true)
   const [retraining, setRetraining] = useState(false)
   const [discountPct, setDiscountPct] = useState(10)
 
   const loadData = (forceRetrain = false) => {
     const setLoadingFn = forceRetrain ? setRetraining : setLoading
     setLoadingFn(true)
+    if (!forceRetrain) setPricesLoading(true)
 
-    Promise.all([
-      getCombos(forceRetrain, discountPct).catch(() => ({ combos: [] })),
-      forceRetrain ? Promise.resolve(null) : getPriceRecommendations().catch(() => [])
-    ])
-      .then(([comboData, priceData]) => {
+    getCombos(forceRetrain, discountPct)
+      .catch(() => ({ combos: [] }))
+      .then((comboData) => {
         setCombos(comboData.combos || comboData || [])
-        if (priceData) setPrices(priceData || [])
       })
       .catch(err => console.error('Combos/Pricing failed:', err))
       .finally(() => setLoadingFn(false))
+
+    if (!forceRetrain) {
+      getPriceRecommendations()
+        .catch(() => [])
+        .then((priceData) => {
+          const list = Array.isArray(priceData)
+            ? priceData
+            : (priceData?.recommendations || [])
+          setPrices(list)
+        })
+        .finally(() => setPricesLoading(false))
+    }
   }
 
   useEffect(() => { loadData() }, [])
@@ -133,7 +144,11 @@ export default function ComboEngine() {
       <ScrollReveal variants={fadeInUp}>
         <div className="card">
           <div className="card-body" style={{ padding: 0 }}>
-            {prices.length === 0 ? (
+            {pricesLoading ? (
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                Loading price recommendations...
+              </div>
+            ) : prices.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                 No price recommendations at this time.
               </div>
@@ -149,7 +164,7 @@ export default function ComboEngine() {
                   </tr>
                 </thead>
                 <tbody>
-                  {prices.map((p, idx) => (
+                  {(Array.isArray(prices) ? prices : []).map((p, idx) => (
                     <tr key={idx}>
                       <td style={{ fontWeight: 600 }}>{p.name}</td>
                       <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>₹{p.current_price}</td>
