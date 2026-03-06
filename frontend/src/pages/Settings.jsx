@@ -3,6 +3,7 @@ import {
   BellRing,
   Building2,
   CreditCard,
+  Globe,
   Languages,
   MenuSquare,
 } from 'lucide-react'
@@ -11,10 +12,12 @@ import {
   updateOpsSettings,
 } from '../api/client'
 import { useSettings } from '../context/SettingsContext'
+import { useTranslation, useLanguage } from '../context/LanguageContext'
 
 const SECTION_ITEMS = [
   { id: 'restaurant_profile', label: 'Restaurant Profile', icon: Building2 },
   { id: 'menu_management', label: 'Menu Management', icon: MenuSquare },
+  { id: 'language', label: 'Language', icon: Globe },
   { id: 'notifications', label: 'Notifications', icon: BellRing },
   { id: 'billing_plan', label: 'Billing & Plan', icon: CreditCard },
   { id: 'voice_ai_config', label: 'Voice AI Config', icon: Languages },
@@ -38,6 +41,8 @@ function Toggle({ checked, onChange, label }) {
 }
 
 export default function Settings() {
+  const { t } = useTranslation()
+  const { language, setLanguage, LANGUAGES } = useLanguage()
   const { setSettings: setGlobalSettings } = useSettings()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -128,10 +133,10 @@ export default function Settings() {
     <div className="app-page">
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">System</div>
-          <h1 className="app-hero-title">Settings</h1>
+          <div className="app-hero-eyebrow">{t('page_settings_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_settings_title')}</h1>
           <p className="app-hero-sub">
-            Manage your restaurant profile, operations, and Voice AI behavior.
+            {t('page_settings_sub')}
           </p>
         </div>
       </div>
@@ -286,6 +291,30 @@ export default function Settings() {
                 >
                   Save Menu Settings
                 </button>
+              </div>
+            )}
+
+            {activeSection === 'language' && (
+              <div className="settings-v2-form">
+                <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 'var(--space-4)' }}>
+                  Choose the display language for the entire dashboard. This preference is saved locally in your browser.
+                </p>
+                <div className="settings-lang-grid">
+                  {LANGUAGES.map((lang) => (
+                    <button
+                      key={lang.code}
+                      type="button"
+                      className={`settings-lang-card ${language === lang.code ? 'settings-lang-card--active' : ''}`}
+                      onClick={() => setLanguage(lang.code)}
+                    >
+                      <span className="settings-lang-native">{lang.native}</span>
+                      <span className="settings-lang-label">{lang.label}</span>
+                      {language === lang.code && (
+                        <span className="settings-lang-check">✓</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 

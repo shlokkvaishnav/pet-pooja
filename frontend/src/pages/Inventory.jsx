@@ -3,6 +3,7 @@ import { adjustInventory, getOpsInventoryFiltered, updateIngredient } from '../a
 import { formatRupees } from '../utils/format'
 import { motion, AnimatePresence } from 'motion/react'
 import { INVENTORY_PAGE_LIMIT } from '../config'
+import { useTranslation } from '../context/LanguageContext'
 
 function formatDelta(current, previous) {
   const delta = (current || 0) - (previous || 0)
@@ -22,6 +23,7 @@ function StockBar({ current, reorder }) {
 }
 
 export default function Inventory() {
+  const { t } = useTranslation()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -96,13 +98,13 @@ export default function Inventory() {
     <div className="app-page">
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">Operations</div>
-          <h1 className="app-hero-title">Inventory</h1>
-          <p className="app-hero-sub">Stock health, reorder signals, and movement.</p>
+          <div className="app-hero-eyebrow">{t('page_inv_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_inv_title')}</h1>
+          <p className="app-hero-sub">{t('page_inv_sub')}</p>
         </div>
         <div className="app-hero-metrics">
           <div className="app-kpi">
-            <div className="app-kpi-label">Stock Value</div>
+            <div className="app-kpi-label">{t('page_inv_stock_value')}</div>
             <div className="app-kpi-value">{formatRupees(summary.total_stock_value)}</div>
             <div className="inventory-kpi-context" style={{ color: stockTrendPositive ? 'var(--success)' : 'var(--danger)' }}>
               {formatDelta(summary.total_stock_value, prevEstimate)} vs {formatRupees(prevEstimate)} last month

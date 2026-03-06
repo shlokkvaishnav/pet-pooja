@@ -72,6 +72,8 @@ function ItemTable({ items, categoryFilter, quadrantFilter }) {
           const popularityRaw = Number(item.popularity_score || 0)
           const popularityPct = Math.max(0, Math.min(100, popularityRaw <= 1 ? popularityRaw * 100 : popularityRaw))
           const marginPct = Number(item.margin_pct || item.cm_percent || 0)
+          const popTier = popularityPct >= 60 ? 'High' : popularityPct >= 30 ? 'Med' : 'Low'
+          const popTierColor = popularityPct >= 60 ? 'var(--success)' : popularityPct >= 30 ? 'var(--warning)' : 'var(--danger)'
 
           return (
             <tr key={item.item_id}>
@@ -93,8 +95,11 @@ function ItemTable({ items, categoryFilter, quadrantFilter }) {
                 </span>
               </td>
               <td>
-                <div style={{ width: 86, height: 8, background: 'var(--bg-overlay)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
-                  <div style={{ width: `${popularityPct}%`, height: '100%', background: 'var(--data-3)', borderRadius: 'var(--radius-full)', transition: 'width 0.6s ease' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ width: 60, height: 8, background: 'var(--bg-overlay)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+                    <div style={{ width: `${popularityPct}%`, height: '100%', background: popTierColor, borderRadius: 'var(--radius-full)', transition: 'width 0.6s ease' }} />
+                  </div>
+                  <span className="profitability-tier-badge" style={{ '--tier-color': popTierColor, fontSize: 9, padding: '1px 5px' }}>{popTier}</span>
                 </div>
               </td>
               <td>

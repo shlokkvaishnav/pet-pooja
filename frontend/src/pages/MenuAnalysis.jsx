@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { getCombos, getDashboardMetrics, getMenuMatrix, getPriceRecommendations, getTrends } from '../api/client'
+import { getCombos, getDashboardMetrics, getMenuMatrix, getPriceRecommendations, getTrends, getCategoryBreakdown } from '../api/client'
 import MenuMatrix from '../components/MenuMatrix'
 import ItemTable from '../components/ItemTable'
 import { motion } from 'motion/react'
 import { ScrollReveal, fadeInUp } from '../utils/animations'
 import { buildPriceOpportunities } from '../utils/revenueInsights'
+import { formatRupees, formatPct } from '../utils/format'
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell, PieChart, Pie } from 'recharts'
+import { useTranslation } from '../context/LanguageContext'
 
 const QUAD_META = {
   star: { label: 'Stars', color: 'var(--success)', icon: 'S' },
@@ -27,8 +30,10 @@ function TabButton({ active, onClick, children }) {
 }
 
 export default function MenuAnalysis() {
+  const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialTab = searchParams.get('tab') === 'price-opportunities' ? 'price' : 'matrix'
+  const tabParam = searchParams.get('tab')
+  const initialTab = tabParam === 'price-opportunities' ? 'price' : tabParam === 'profitability' ? 'profitability' : tabParam === 'velocity' ? 'velocity' : 'matrix'
 
   const [activeTab, setActiveTab] = useState(initialTab)
   const [data, setData] = useState(null)
@@ -38,6 +43,7 @@ export default function MenuAnalysis() {
   const [totalOrders, setTotalOrders] = useState(0)
   const [loading, setLoading] = useState(true)
   const [trendsLoading, setTrendsLoading] = useState(true)
+  const [categoryBreakdown, setCategoryBreakdown] = useState([])
   const [quadrantFilter, setQuadrantFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [showAllCategoryTrends, setShowAllCategoryTrends] = useState(false)
@@ -53,14 +59,16 @@ export default function MenuAnalysis() {
       getPriceRecommendations().catch(() => ({ recommendations: [] })),
       getCombos().catch(() => ({ combos: [] })),
       getDashboardMetrics().catch(() => ({ total_orders: 0 })),
+      getCategoryBreakdown().catch(() => ({ categories: [] })),
     ])
-      .then(([matrixData, trendsData, priceData, comboData, metrics]) => {
+      .then(([matrixData, trendsData, priceData, comboData, metrics, catData]) => {
         if (!active) return
         setData(matrixData)
         setTrends(trendsData)
         setPriceApi(priceData?.recommendations || [])
         setCombos(comboData?.combos || [])
         setTotalOrders(metrics?.total_orders || 0)
+        setCategoryBreakdown(catData?.categories || [])
       })
       .catch((err) => {
         console.error('Menu Analysis load failed:', err)
@@ -78,6 +86,8 @@ export default function MenuAnalysis() {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
       if (activeTab === 'price') next.set('tab', 'price-opportunities')
+      else if (activeTab === 'profitability') next.set('tab', 'profitability')
+      else if (activeTab === 'velocity') next.set('tab', 'velocity')
       else next.delete('tab')
       return next
     }, { replace: true })
@@ -152,6 +162,64 @@ export default function MenuAnalysis() {
     driftByQuadrant[drift.current_quadrant] = (driftByQuadrant[drift.current_quadrant] || 0) + 1
   }
 
+  // --- Profitability tab data ---
+  const marginTiers = useMemo(() => {
+    const high = items.filter((i) => (i.margin_pct || i.cm_percent || 0) >= 65).length
+    const medium = items.filter((i) => { const m = i.margin_pct || i.cm_percent || 0; return m >= 50 && m < 65 }).length
+    const low = items.filter((i) => (i.margin_pct || i.cm_percent || 0) < 50).length
+    return [
+      { tier: 'High (≥65%)', count: high, color: 'var(--success)' },
+      { tier: 'Medium (50–65%)', count: medium, color: 'var(--warning)' },
+      { tier: 'Low (<50%)', count: low, color: 'var(--danger)' },
+    ]
+  }, [items])
+
+  const categoryMargins = useMemo(() => {
+    const catMap = new Map()
+    for (const item of items) {
+      const cat = item.category || 'Uncategorized'
+      const entry = catMap.get(cat) || { category: cat, totalMargin: 0, totalRevenue: 0, count: 0 }
+      entry.totalMargin += (item.margin_pct || item.cm_percent || 0)
+      entry.totalRevenue += (item.revenue_30d || item.total_revenue || 0)
+      entry.count += 1
+      catMap.set(cat, entry)
+    }
+    return [...catMap.values()]
+      .map((c) => ({ ...c, avgMargin: c.count > 0 ? c.totalMargin / c.count : 0 }))
+      .sort((a, b) => b.avgMargin - a.avgMargin)
+  }, [items])
+
+  const itemsByMargin = useMemo(() =>
+    [...enrichedItems].sort((a, b) => (b.margin_pct || b.cm_percent || 0) - (a.margin_pct || a.cm_percent || 0)),
+  [enrichedItems])
+
+  // --- Velocity tab data ---
+  const popularityTiers = useMemo(() => {
+    const high = items.filter((i) => (i.popularity_score || 0) >= 0.6).length
+    const medium = items.filter((i) => { const p = i.popularity_score || 0; return p >= 0.3 && p < 0.6 }).length
+    const low = items.filter((i) => (i.popularity_score || 0) < 0.3).length
+    return [
+      { tier: 'High (≥0.6)', count: high, color: 'var(--success)' },
+      { tier: 'Medium (0.3–0.6)', count: medium, color: 'var(--warning)' },
+      { tier: 'Low (<0.3)', count: low, color: 'var(--danger)' },
+    ]
+  }, [items])
+
+  const itemsByVelocity = useMemo(() =>
+    [...enrichedItems].sort((a, b) => (b.popularity_score || 0) - (a.popularity_score || 0)),
+  [enrichedItems])
+
+  const CHART_TOOLTIP = {
+    backgroundColor: 'var(--bg-overlay)',
+    border: '1px solid var(--border-strong)',
+    padding: '8px 12px',
+    color: '#FFFFFF',
+    borderRadius: 8,
+    fontSize: 12,
+    fontFamily: 'var(--font-body)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+  }
+
   const handleTrendSort = (column) => {
     if (trendSortBy === column) {
       setTrendSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'))
@@ -172,15 +240,17 @@ export default function MenuAnalysis() {
     >
       <motion.div className="app-hero" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
         <div>
-          <div className="app-hero-eyebrow">Intelligence</div>
-          <h1 className="app-hero-title">Menu Intelligence</h1>
-          <p className="app-hero-sub">Menu performance by profitability and popularity. See which items are driving your revenue.</p>
+          <div className="app-hero-eyebrow">{t('page_menu_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_menu_title')}</h1>
+          <p className="app-hero-sub">{t('page_menu_sub')}</p>
         </div>
       </motion.div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 'var(--space-4)' }}>
-        <TabButton active={activeTab === 'matrix'} onClick={() => setActiveTab('matrix')}>BCG Matrix</TabButton>
-        <TabButton active={activeTab === 'price'} onClick={() => setActiveTab('price')}>Price Opportunities</TabButton>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 'var(--space-4)', flexWrap: 'wrap' }}>
+        <TabButton active={activeTab === 'matrix'} onClick={() => setActiveTab('matrix')}>{t('page_menu_tab_matrix')}</TabButton>
+        <TabButton active={activeTab === 'profitability'} onClick={() => setActiveTab('profitability')}>Profitability</TabButton>
+        <TabButton active={activeTab === 'velocity'} onClick={() => setActiveTab('velocity')}>Popularity &amp; Velocity</TabButton>
+        <TabButton active={activeTab === 'price'} onClick={() => setActiveTab('price')}>{t('page_menu_tab_price')}</TabButton>
       </div>
 
       {activeTab === 'matrix' && (
@@ -278,6 +348,180 @@ export default function MenuAnalysis() {
               </div>
             </ScrollReveal>
           )}
+        </>
+      )}
+
+      {activeTab === 'profitability' && (
+        <>
+          <div className="grid-3" style={{ marginBottom: 'var(--space-6)' }}>
+            {marginTiers.map((t) => (
+              <div key={t.tier} className="card">
+                <div className="card-body" style={{ textAlign: 'center', padding: 'var(--space-5)' }}>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: t.color }}>{t.count}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{t.tier}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
+            <div className="card">
+              <div className="card-header">Margin Distribution by Category</div>
+              <div className="card-body">
+                {categoryMargins.length === 0 ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No category data available.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={categoryMargins} layout="vertical" margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
+                      <XAxis type="number" domain={[0, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                      <YAxis dataKey="category" type="category" width={110} tick={{ fill: 'var(--text-primary)', fontSize: 11, fontWeight: 500 }} axisLine={false} tickLine={false} />
+                      <Tooltip contentStyle={CHART_TOOLTIP} itemStyle={{ color: '#fff' }} labelStyle={{ color: '#fff' }} formatter={(v) => `${v.toFixed(1)}%`} cursor={{ fill: 'var(--bg-overlay)' }} />
+                      <Bar dataKey="avgMargin" radius={[0, 6, 6, 0]} background={{ fill: 'rgba(255,255,255,0.05)', radius: [0, 6, 6, 0] }}>
+                        {categoryMargins.map((c, i) => (
+                          <Cell key={i} fill={c.avgMargin >= 65 ? 'var(--success)' : c.avgMargin >= 50 ? 'var(--warning)' : 'var(--danger)'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-header">Margin Tier Breakdown</div>
+              <div className="card-body" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                <ResponsiveContainer width="100%" height={280}>
+                  <PieChart>
+                    <Pie
+                      data={marginTiers.filter((t) => t.count > 0)}
+                      dataKey="count"
+                      nameKey="tier"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={100}
+                      paddingAngle={3}
+                      label={({ tier, count }) => `${tier}: ${count}`}
+                    >
+                      {marginTiers.filter((t) => t.count > 0).map((t, i) => (
+                        <Cell key={i} fill={t.color === 'var(--success)' ? '#2A7A50' : t.color === 'var(--warning)' ? '#C07A20' : '#D94841'} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={CHART_TOOLTIP} itemStyle={{ color: '#fff' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header">All Items by Contribution Margin</div>
+            <div className="card-body" style={{ padding: 0, maxHeight: 480, overflowY: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Item</th>
+                    <th>Category</th>
+                    <th style={{ textAlign: 'right' }}>Price</th>
+                    <th style={{ textAlign: 'right' }}>CM%</th>
+                    <th>Tier</th>
+                    <th>Quadrant</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemsByMargin.map((item, idx) => {
+                    const m = item.margin_pct || item.cm_percent || 0
+                    const tier = m >= 65 ? 'High' : m >= 50 ? 'Medium' : 'Low'
+                    const tierColor = m >= 65 ? 'var(--success)' : m >= 50 ? 'var(--warning)' : 'var(--danger)'
+                    return (
+                      <tr key={item.item_id}>
+                        <td style={{ color: 'var(--text-muted)', fontSize: 11 }}>{idx + 1}</td>
+                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.category}</td>
+                        <td className="col-number" style={{ fontWeight: 600 }}>{formatRupees(item.selling_price)}</td>
+                        <td className="col-number" style={{ fontWeight: 700, color: tierColor, fontFamily: 'var(--font-mono)' }}>{m.toFixed(1)}%</td>
+                        <td><span className="profitability-tier-badge" style={{ '--tier-color': tierColor }}>{tier}</span></td>
+                        <td style={{ fontSize: 12, textTransform: 'capitalize' }}>{item.quadrant}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {activeTab === 'velocity' && (
+        <>
+          <div className="grid-3" style={{ marginBottom: 'var(--space-6)' }}>
+            {popularityTiers.map((t) => (
+              <div key={t.tier} className="card">
+                <div className="card-body" style={{ textAlign: 'center', padding: 'var(--space-5)' }}>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: t.color }}>{t.count}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{t.tier}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
+            <div className="card-header">Items by Popularity Score</div>
+            <div className="card-body" style={{ padding: 0, maxHeight: 520, overflowY: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Item</th>
+                    <th>Category</th>
+                    <th style={{ textAlign: 'right' }}>Popularity</th>
+                    <th>Classification</th>
+                    <th>Trend</th>
+                    <th style={{ textAlign: 'right' }}>CM%</th>
+                    <th>Quadrant</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemsByVelocity.map((item, idx) => {
+                    const pop = item.popularity_score || 0
+                    const tier = pop >= 0.6 ? 'High' : pop >= 0.3 ? 'Medium' : 'Low'
+                    const tierColor = pop >= 0.6 ? 'var(--success)' : pop >= 0.3 ? 'var(--warning)' : 'var(--danger)'
+                    const m = item.margin_pct || item.cm_percent || 0
+                    return (
+                      <tr key={item.item_id}>
+                        <td style={{ color: 'var(--text-muted)', fontSize: 11 }}>{idx + 1}</td>
+                        <td style={{ fontWeight: 600 }}>{item.name}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.category}</td>
+                        <td className="col-number">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+                            <div style={{ width: 60, height: 6, background: 'var(--bg-overlay)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.round(pop * 100)}%`, height: '100%', background: tierColor, borderRadius: 'var(--radius-full)' }} />
+                            </div>
+                            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 12 }}>{(pop * 100).toFixed(0)}</span>
+                          </div>
+                        </td>
+                        <td><span className="profitability-tier-badge" style={{ '--tier-color': tierColor }}>{tier}</span></td>
+                        <td>
+                          {item.popularity_trend_arrow ? (
+                            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: item.revenue_trend_pct > 0 ? 'var(--success)' : item.revenue_trend_pct < 0 ? 'var(--danger)' : 'var(--text-muted)' }}>
+                              {item.popularity_trend_arrow}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>
+                          )}
+                        </td>
+                        <td className="col-number" style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: m >= 65 ? 'var(--success)' : m >= 50 ? 'var(--warning)' : 'var(--danger)' }}>
+                          {m.toFixed(1)}%
+                        </td>
+                        <td style={{ fontSize: 12, textTransform: 'capitalize' }}>{item.quadrant}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </>
       )}
 

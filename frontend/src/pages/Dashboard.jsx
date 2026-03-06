@@ -11,6 +11,7 @@ import {
   getOpsInventory,
 } from '../api/client'
 import InfoTooltip from '../components/InfoTooltip'
+import { useTranslation } from '../context/LanguageContext'
 import {
   ResponsiveContainer,
   LineChart,
@@ -77,6 +78,7 @@ function Sparkline({ data, color }) {
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const [metrics, setMetrics] = useState(null)
   const [trends, setTrends] = useState(null)
   const [reports, setReports] = useState(null)
@@ -194,7 +196,7 @@ export default function Dashboard() {
   }
 
   if (!metrics) {
-    return <div className="loading">Failed to load dashboard data. Ensure the backend is running.</div>
+    return <div className="loading">{t('dash_failed_load')}</div>
   }
 
   const topItemsByRevenue = [...(trends?.item_trends || [])]
@@ -207,33 +209,33 @@ export default function Dashboard() {
   const driftItems = (trends?.quadrant_drift || []).slice(0, 5)
 
   const alertChips = [
-    { label: `${riskItems.length} underperformers`, tone: 'danger', target: 'underperformers' },
-    { label: `${hiddenStars.length} hidden gems`, tone: 'success', target: 'hidden-gems' },
-    { label: `${lowStock.length} low stock alerts`, tone: 'warning', target: 'low-stock' },
-    { label: `${driftItems.length} quadrant drifts`, tone: 'info', target: 'quadrant-drift' },
+    { label: `${riskItems.length} ${t('dash_underperformers')}`, tone: riskItems.length > 0 ? 'danger' : 'neutral', target: 'underperformers' },
+    { label: `${hiddenStars.length} ${t('dash_hidden_gems')}`, tone: hiddenStars.length > 0 ? 'success' : 'neutral', target: 'hidden-gems' },
+    { label: `${lowStock.length} ${t('dash_low_stock_alerts')}`, tone: lowStock.length > 0 ? 'warning' : 'neutral', target: 'low-stock' },
+    { label: `${driftItems.length} ${t('dash_quadrant_drifts')}`, tone: driftItems.length > 0 ? 'info' : 'neutral', target: 'quadrant-drift' },
   ]
 
   const kpiChips = [
     {
-      title: "Today's Revenue",
+      title: t('dash_today_revenue'),
       value: formatRupeesShort(todayRevenue),
       trend: revenueTrend,
       sparkline: revenueSeries,
     },
     {
-      title: "Today's Orders",
+      title: t('dash_today_orders'),
       value: (todayOrders).toLocaleString('en-IN'),
       trend: ordersTrend,
       sparkline: orderSeries,
     },
     {
-      title: 'Avg Order Value',
+      title: t('dash_avg_order_value'),
       value: formatRupees(todayAov),
       trend: aovTrend,
       sparkline: aovSeries,
     },
     {
-      title: 'Menu Health',
+      title: t('dash_menu_health'),
       value: `${metrics.health_score || 0}/100`,
       trend: Number((hiddenStars.length - riskItems.length).toFixed(1)),
       sparkline: revenueSeries,
@@ -249,10 +251,10 @@ export default function Dashboard() {
     >
       <section className="dash-header-compact">
         <div className="dash-header-main">
-          <h1 className="dash-title">Dashboard Overview</h1>
+          <h1 className="dash-title">{t('dash_title')}</h1>
           <p className="dash-subtitle">
             <span className="dash-live-dot" />
-            Last updated {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+            {t('dash_last_updated')} {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
           </p>
         </div>
 
@@ -265,15 +267,16 @@ export default function Dashboard() {
                 key={chip.title}
                 className={`dash-kpi-chip ${isSelected ? 'dash-kpi-chip--selected' : ''}`}
                 onClick={() => setSelectedChip(isSelected ? null : chip.title)}
-                whileTap={{ scale: 0.98 }}
-                animate={isSelected ? { scale: 1.02, y: -4 } : { scale: 1, y: 0 }}
+                whileHover={{ scale: 1.03, y: -4 }}
+                whileTap={{ scale: 0.97 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 25 }}
               >
                 <div className="dash-kpi-chip-head">
                   <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
                     <span className="dash-kpi-chip-label">{chip.title}</span>
-                    {chip.title === 'Menu Health' && (
+                    {chip.title === t('dash_menu_health') && (
                       <InfoTooltip
-                        title="Menu Health Breakdown"
+                        title={t('dash_menu_health_breakdown')}
                         explanation={metrics.health_score_breakdown?.explanation}
                         components={metrics.health_score_breakdown?.components}
                       />
@@ -296,7 +299,7 @@ export default function Dashboard() {
       {secondaryLoaded && secondaryErrors.length > 0 && (
         <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
           <div className="card-body" style={{ color: 'var(--warning)', fontSize: 12 }}>
-            Some sections loaded partially: {secondaryErrors.join(', ')}
+            {t('dash_partial_load')} {secondaryErrors.join(', ')}
           </div>
         </div>
       )}
@@ -323,12 +326,12 @@ export default function Dashboard() {
       </section>
 
       <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
-        <div className="card-header">AI Upsell Opportunities</div>
+        <div className="card-header">{t('dash_upsell')}</div>
         <div className="card-body" style={{ overflowX: 'auto' }}>
           {secondaryLoaded ? (
             upsellItems.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-                No strong upsell candidates yet. Add more order history to improve candidate ranking.
+                {t('dash_no_upsell')}
               </div>
             ) : (
               <div style={{ display: 'flex', gap: 'var(--space-3)', minWidth: 'max-content' }}>
@@ -341,7 +344,7 @@ export default function Dashboard() {
                     <div className="card-body">
                       <div style={{ fontWeight: 700, marginBottom: 6 }}>{item.name}</div>
                       <div style={{ color: 'var(--success)', fontWeight: 700, marginBottom: 8 }}>
-                        Contribution Margin {formatPct(item.cm_percent)}
+                        {t('dash_contribution_margin')} {formatPct(item.cm_percent)}
                       </div>
                       <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
                         {item.reason}
@@ -351,7 +354,7 @@ export default function Dashboard() {
                         style={{ fontSize: 12, padding: 0 }}
                         onClick={() => navigate(`/dashboard/menu-analysis?item=${item.item_id}`)}
                       >
-                        View Item
+                        {t('dash_view_item')}
                       </button>
                     </div>
                   </div>
@@ -370,21 +373,21 @@ export default function Dashboard() {
 
       <section className="card" style={{ marginBottom: 'var(--space-6)' }}>
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Price Opportunities</span>
+          <span>{t('dash_price_opps')}</span>
           <Link to="/dashboard/menu-analysis?tab=price-opportunities" className="btn btn-ghost" style={{ fontSize: 12 }}>
-            Review Suggestions
+            {t('dash_review_suggestions')}
           </Link>
         </div>
         <div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Identified Opportunities</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('dash_identified_opps')}</div>
             <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--accent)' }}>
               {priceInsight.opportunities.length}
             </div>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 420 }}>
             {priceInsight.insufficientData && priceInsight.opportunities.length === 0
-              ? 'Not enough order history to generate price recommendations yet.'
+              ? t('dash_no_price_recs')
               : 'Recommendations are based on BCG quadrant behavior, margin signals, and bundle opportunities.'}
           </div>
         </div>
@@ -392,7 +395,7 @@ export default function Dashboard() {
 
       <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
         <div className="card">
-          <div className="card-header">Revenue Trend (30D)</div>
+          <div className="card-header">{t('dash_revenue_trend')}</div>
           <div className="card-body">
             <ResponsiveContainer width="100%" height={280}>
               <LineChart data={revenueSeries} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
@@ -407,10 +410,10 @@ export default function Dashboard() {
         </div>
 
         <div className="card">
-          <div className="card-header">Orders by Hour</div>
+          <div className="card-header">{t('dash_orders_by_hour')}</div>
           <div className="card-body">
             {hourlyOrders.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No hourly order data available.</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>{t('dash_no_hourly')}</div>
             ) : (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={hourlyOrders} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
@@ -431,7 +434,7 @@ export default function Dashboard() {
 
       <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
         <div className="card">
-          <div className="card-header">Top Menu Items by Revenue</div>
+          <div className="card-header">{t('dash_top_items')}</div>
           <div className="card-body">
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={topItemsByRevenue} layout="vertical" margin={{ top: 10, right: 12, left: 12, bottom: 10 }}>
@@ -449,10 +452,10 @@ export default function Dashboard() {
         </div>
 
         <div className="card" id="low-stock">
-          <div className="card-header">Low Stock Alerts</div>
+          <div className="card-header">{t('dash_low_stock')}</div>
           <div className="card-body">
             {lowStock.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No critical low-stock ingredients.</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>{t('dash_no_low_stock')}</div>
             ) : (
               <div className="dash-low-stock-list">
                 {lowStock.map((item) => (
@@ -461,7 +464,7 @@ export default function Dashboard() {
                       <div className="dash-low-stock-name">{item.name}</div>
                       <div className="dash-low-stock-meta">{item.current_stock} {item.unit} left • Reorder at {item.reorder_level}</div>
                     </div>
-                    <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => navigate('/dashboard/inventory')}>Reorder</button>
+                    <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => navigate('/dashboard/inventory')}>{t('dash_reorder')}</button>
                   </div>
                 ))}
               </div>
@@ -472,14 +475,14 @@ export default function Dashboard() {
 
       <section className="grid-2" style={{ marginBottom: 'var(--space-6)' }}>
         <div className="card" id="hidden-gems">
-          <div className="card-header">Hidden Gems</div>
+          <div className="card-header">{t('dash_hidden_gems_section')}</div>
           <div className="dash-list-header">
-            <span>Item</span>
-            <span>CM%</span>
+            <span>{t('dash_item')}</span>
+            <span>{t('dash_cm_pct')}</span>
           </div>
           <div className="card-body" style={{ padding: 0 }}>
             {hiddenStars.length === 0 ? (
-              <div style={{ padding: 'var(--space-5)', color: 'var(--text-muted)', fontSize: 13 }}>No hidden gems found.</div>
+              <div style={{ padding: 'var(--space-5)', color: 'var(--text-muted)', fontSize: 13 }}>{t('dash_no_hidden_gems')}</div>
             ) : hiddenStars.map((item) => (
               <div key={item.item_id} className="dash-list-row">
                 <span>{item.name}</span>
@@ -490,10 +493,10 @@ export default function Dashboard() {
         </div>
 
         <div className="card" id="underperformers">
-          <div className="card-header">Underperformers</div>
+          <div className="card-header">{t('dash_underperformers_section')}</div>
           <div className="dash-list-header">
-            <span>Item</span>
-            <span>CM%</span>
+            <span>{t('dash_item')}</span>
+            <span>{t('dash_cm_pct')}</span>
           </div>
           <div className="card-body" style={{ padding: 0 }}>
             {riskItems.length === 0 ? (

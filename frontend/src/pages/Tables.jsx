@@ -10,6 +10,7 @@ import {
   getMenuItemsList,
   addItemToTableOrder,
 } from '../api/client'
+import { useTranslation } from '../context/LanguageContext'
 
 const statusStyles = {
   empty: { color: 'var(--success)', bg: 'var(--success-subtle)', label: 'Available' },
@@ -231,6 +232,7 @@ function AddItemModal({ table, onClose, onItemAdded }) {
 
 /* ── Main Tables Component ── */
 export default function Tables() {
+  const { t } = useTranslation()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('')
@@ -363,17 +365,17 @@ export default function Tables() {
       {/* Hero */}
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">Operations</div>
-          <h1 className="app-hero-title">Tables</h1>
-          <p className="app-hero-sub">Visual floor plan and live table management.</p>
+          <div className="app-hero-eyebrow">{t('page_tables_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_tables_title')}</h1>
+          <p className="app-hero-sub">{t('page_tables_sub')}</p>
         </div>
         <div className="app-hero-metrics">
           <div className="app-kpi">
-            <div className="app-kpi-label">Total</div>
+            <div className="app-kpi-label">{t('page_tables_total')}</div>
             <div className="app-kpi-value">{summary.total_tables}</div>
           </div>
           <div className="app-kpi">
-            <div className="app-kpi-label" style={{ color: statusStyles.empty.color }}>Available</div>
+            <div className="app-kpi-label" style={{ color: statusStyles.empty.color }}>{t('page_tables_available')}</div>
             <div className="app-kpi-value" style={{ color: statusStyles.empty.color }}>{summary.empty || 0}</div>
           </div>
           <div className="app-kpi">

@@ -3,6 +3,7 @@ import { exportReportsCsv, getOpsReportsFiltered } from '../api/client'
 import { formatRupees } from '../utils/format'
 import { motion } from 'motion/react'
 import { Download } from 'lucide-react'
+import { useTranslation } from '../context/LanguageContext'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -43,6 +44,7 @@ function todayIso() {
 }
 
 export default function Reports() {
+  const { t } = useTranslation()
   const [data, setData] = useState([])
   const [topItems, setTopItems] = useState([])
   const [topCategories, setTopCategories] = useState([])
@@ -144,17 +146,17 @@ export default function Reports() {
     <div className="app-page">
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">Insights</div>
-          <h1 className="app-hero-title">Reports</h1>
-          <p className="app-hero-sub">Revenue and order momentum at a glance.</p>
+          <div className="app-hero-eyebrow">{t('page_reports_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_reports_title')}</h1>
+          <p className="app-hero-sub">{t('page_reports_sub')}</p>
         </div>
         <div className="app-hero-metrics">
           <div className="app-kpi">
-            <div className="app-kpi-label">Days Tracked</div>
+            <div className="app-kpi-label">{t('page_reports_days')}</div>
             <div className="app-kpi-value">{data.length}</div>
           </div>
           <div className="app-kpi">
-            <div className="app-kpi-label">Total Revenue</div>
+            <div className="app-kpi-label">{t('page_reports_total_rev')}</div>
             <div className="app-kpi-value">{formatRupees(totalRevenue)}</div>
           </div>
         </div>

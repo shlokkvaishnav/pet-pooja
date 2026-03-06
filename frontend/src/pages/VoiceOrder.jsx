@@ -9,6 +9,7 @@ import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animation
 import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
 import { buildUpsellCandidates } from '../utils/revenueInsights'
 import { VOICE_AUTO_LISTEN_DELAY_MS } from '../config'
+import { useTranslation } from '../context/LanguageContext'
 
 function generateSessionId() {
   return 'sess-' + Math.random().toString(36).slice(2, 10)
@@ -24,6 +25,7 @@ function getRestaurantId() {
 }
 
 export default function VoiceOrder() {
+  const { t } = useTranslation()
   const [result, setResult] = useState(null)
   const [textInput, setTextInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -360,9 +362,9 @@ export default function VoiceOrder() {
         transition={{ duration: 0.5 }}
       >
         <div>
-          <div className="app-hero-eyebrow">Operations</div>
-          <h1 className="app-hero-title">Voice Ordering</h1>
-          <p className="app-hero-sub">Live voice-to-order pipeline with multi-turn context.</p>
+          <div className="app-hero-eyebrow">{t('page_voice_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_voice_title')}</h1>
+          <p className="app-hero-sub">{t('page_voice_sub')}</p>
         </div>
       </motion.div>
       <motion.div
@@ -371,15 +373,15 @@ export default function VoiceOrder() {
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.5 }}
       >
-        <h1 style={{ fontFamily: 'var(--font-display)' }}>Voice Order</h1>
-        <p>Speak or type to order, modify, remove items, or confirm</p>
+        <h1 style={{ fontFamily: 'var(--font-display)' }}>{t('page_voice_heading')}</h1>
+        <p>{t('page_voice_heading_sub')}</p>
       </motion.div>
 
       {/* Step indicator */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-6)',
       }}>
-        {['Listen', 'Review'].map((label, i) => {
+        {[t('page_voice_step_listen'), t('page_voice_step_review')].map((label, i) => {
           const stepNum = i + 1
           const active = step >= stepNum
           return (

@@ -3,6 +3,7 @@ import { motion } from 'motion/react'
 import { getCombos, getDashboardMetrics, getMenuMatrix } from '../api/client'
 import { formatPct, formatRupees } from '../utils/format'
 import { buildComboInsights } from '../utils/revenueInsights'
+import { useTranslation } from '../context/LanguageContext'
 
 function ComboSkeleton() {
   return (
@@ -22,6 +23,7 @@ function ComboSkeleton() {
 }
 
 export default function ComboEngine() {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [combosRaw, setCombosRaw] = useState([])
   const [menuItems, setMenuItems] = useState([])
@@ -96,9 +98,9 @@ export default function ComboEngine() {
     >
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">Intelligence</div>
-          <h1 className="app-hero-title">Combo Engine</h1>
-          <p className="app-hero-sub">AI-generated bundles to increase average order value and margin contribution.</p>
+          <div className="app-hero-eyebrow">{t('page_combo_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_combo_title')}</h1>
+          <p className="app-hero-sub">{t('page_combo_sub')}</p>
         </div>
       </div>
 
@@ -118,17 +120,17 @@ export default function ComboEngine() {
           marginBottom: 'var(--space-5)',
         }}
       >
-        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Total Combos Identified</div><div style={{ fontSize: 28, fontWeight: 800 }}>{summary.totalCombos}</div></div></div>
-        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Average AOV Uplift</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent)' }}>{formatPct(summary.avgAovUpliftPct)}</div></div></div>
-        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Active / Promoted</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--success)' }}>{summary.activePromoted}</div></div></div>
+        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('page_combo_total')}</div><div style={{ fontSize: 28, fontWeight: 800 }}>{summary.totalCombos}</div></div></div>
+        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('page_combo_avg_aov')}</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent)' }}>{formatPct(summary.avgAovUpliftPct)}</div></div></div>
+        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('page_combo_active')}</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--success)' }}>{summary.activePromoted}</div></div></div>
       </section>
 
       <section style={{ marginBottom: 'var(--space-6)' }}>
-        <h2 style={{ marginBottom: 'var(--space-3)' }}>Recommended Combos</h2>
+        <h2 style={{ marginBottom: 'var(--space-3)' }}>{t('page_combo_recommended')}</h2>
         {!hasCombos ? (
           <div className="card">
             <div className="card-body">
-              Unable to compute combos right now. Refresh after new order data is available.
+              {t('page_combo_no_data')}
             </div>
           </div>
         ) : (
@@ -155,7 +157,7 @@ export default function ComboEngine() {
                     disabled={combo.isPromoted}
                     style={{ width: '100%' }}
                   >
-                    {combo.isPromoted ? 'Promoted' : 'Promote This Combo'}
+                    {combo.isPromoted ? t('page_combo_promoted_btn') : t('page_combo_promote_btn')}
                   </button>
                 </div>
               </div>
@@ -165,11 +167,11 @@ export default function ComboEngine() {
       </section>
 
       <section>
-        <h2 style={{ marginBottom: 'var(--space-3)' }}>Promoted Combos</h2>
+        <h2 style={{ marginBottom: 'var(--space-3)' }}>{t('page_combo_promoted')}</h2>
         {insights.promotedIds.length === 0 ? (
           <div className="card">
             <div className="card-body">
-              Promote at least one combo above to highlight it for your staff during order-taking.
+              {t('page_combo_promote_tip')}
             </div>
           </div>
         ) : (

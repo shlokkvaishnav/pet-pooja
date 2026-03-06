@@ -13,6 +13,7 @@ const Signup = lazy(() => import('./pages/Signup'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const MenuAnalysis = lazy(() => import('./pages/MenuAnalysis'))
 const ComboEngine = lazy(() => import('./pages/ComboEngine'))
+const HiddenStars = lazy(() => import('./pages/HiddenStars'))
 const VoiceOrder = lazy(() => import('./pages/VoiceOrder'))
 const Orders = lazy(() => import('./pages/Orders'))
 const Tables = lazy(() => import('./pages/Tables'))
@@ -67,6 +68,7 @@ export default function App() {
               >
                 <Route index element={<Dashboard />} />
                 <Route path="menu-analysis" element={<MenuAnalysis />} />
+                <Route path="hidden-stars" element={<HiddenStars />} />
                 <Route path="combos" element={<ComboEngine />} />
                 <Route path="voice-order" element={<VoiceOrder />} />
                 <Route path="orders" element={<Orders />} />

@@ -4,6 +4,7 @@ import { cancelOpsOrder, getOpsOrder, getOpsOrders, updateOpsOrder } from '../ap
 import { formatRupees, formatRupeesShort } from '../utils/format'
 import { motion, AnimatePresence } from 'motion/react'
 import { ORDERS_PAGE_LIMIT } from '../config'
+import { useTranslation } from '../context/LanguageContext'
 
 const statusColors = {
   building: 'var(--warning)',
@@ -19,6 +20,7 @@ function formatOrderId(order) {
 }
 
 export default function Orders() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -203,18 +205,18 @@ export default function Orders() {
     <div className="app-page">
       <div className="app-hero">
         <div>
-          <div className="app-hero-eyebrow">Operations</div>
-          <h1 className="app-hero-title">Orders</h1>
-          <p className="app-hero-sub">Live order flow and status monitoring.</p>
+          <div className="app-hero-eyebrow">{t('page_orders_eyebrow')}</div>
+          <h1 className="app-hero-title">{t('page_orders_title')}</h1>
+          <p className="app-hero-sub">{t('page_orders_sub')}</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
           <div className="app-hero-metrics">
             <div className="app-kpi">
-              <div className="app-kpi-label">Total Orders (30d)</div>
+              <div className="app-kpi-label">{t('page_orders_total_30d')}</div>
               <div className="app-kpi-value">{summary.total_orders}</div>
             </div>
             <div className="app-kpi">
-              <div className="app-kpi-label">Revenue (30d)</div>
+              <div className="app-kpi-label">{t('page_orders_revenue_30d')}</div>
               <div className="app-kpi-value">{formatRupeesShort(summary.total_revenue)}</div>
             </div>
             <div className="app-kpi">
