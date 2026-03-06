@@ -5,7 +5,7 @@ import OrderSummary from '../components/OrderSummary'
 import KOTTicket from '../components/KOTTicket'
 import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
-import { Trash2, ShoppingCart, ChevronUp, ChevronDown, X } from 'lucide-react'
+import { Trash2, ShoppingCart, ChevronUp, ChevronDown, X, ClipboardList, CheckCircle } from 'lucide-react'
 
 function generateSessionId() {
   return 'sess-' + Math.random().toString(36).slice(2, 10)
@@ -19,6 +19,7 @@ export default function VoiceOrder() {
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [actionFeedback, setActionFeedback] = useState(null) // {type, message}
   const [orderTabOpen, setOrderTabOpen] = useState(false)
+  const [confirmedOrders, setConfirmedOrders] = useState([]) // Array of confirmed order snapshots
   const sessionId = useRef(generateSessionId())
   const currentAudioRef = useRef(null)
 
@@ -97,7 +98,7 @@ export default function VoiceOrder() {
     // Auto-play TTS response
     if (data.tts_audio_b64) playTTSAudio(data.tts_audio_b64)
 
-    // Auto-confirm if voice said "confirm"
+    // Auto-confirm if voice said "confirm" and cart has items
     if (intent === 'CONFIRM' && data.session_items?.length > 0) {
       handleVoiceConfirm(data)
     }
@@ -153,7 +154,18 @@ export default function VoiceOrder() {
     setLoading(true)
     try {
       await confirmOrder(orderToConfirm, data.kot)
-      setResult(prev => ({ ...prev, confirmed: true }))
+      // Save confirmed order to orders list
+      setConfirmedOrders(prev => [{
+        id: orderToConfirm.order_id || `ORD-${Date.now()}`,
+        items: [...(data.session_items || data.items || [])],
+        order: { ...orderToConfirm },
+        confirmedAt: new Date().toLocaleTimeString(),
+      }, ...prev])
+      // Reset for new order
+      setResult(null)
+      setActionFeedback({ type: 'confirm', message: 'Order confirmed! KOT sent to kitchen.' })
+      setOrderTabOpen(false)
+      sessionId.current = generateSessionId()
     } catch (err) {
       setError(err.response?.data?.detail || err.detail || 'Order confirmation failed')
     }
@@ -167,7 +179,18 @@ export default function VoiceOrder() {
     setError(null)
     try {
       await confirmOrder(orderToConfirm, result.kot)
-      setResult(prev => ({ ...prev, confirmed: true }))
+      // Save confirmed order to orders list
+      setConfirmedOrders(prev => [{
+        id: orderToConfirm.order_id || `ORD-${Date.now()}`,
+        items: [...(result.session_items || result.items || [])],
+        order: { ...orderToConfirm },
+        confirmedAt: new Date().toLocaleTimeString(),
+      }, ...prev])
+      // Reset for new order
+      setResult(null)
+      setActionFeedback({ type: 'confirm', message: 'Order confirmed! KOT sent to kitchen.' })
+      setOrderTabOpen(false)
+      sessionId.current = generateSessionId()
     } catch (err) {
       setError(err.response?.data?.detail || err.detail || 'Order confirmation failed')
     }
@@ -193,8 +216,8 @@ export default function VoiceOrder() {
   // Effective order for display (use session_order which covers all turns)
   const effectiveOrder = result?.session_order || result?.order
 
-  // Determine step: 1=Listen, 2=Review (with continued input), 3=Confirmed
-  const step = result?.confirmed ? 3 : result ? 2 : 1
+  // Determine step: 1=Listen, 2=Review (with continued input)
+  const step = result ? 2 : 1
 
   // Feedback colors
   const feedbackStyles = {
@@ -238,7 +261,7 @@ export default function VoiceOrder() {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-6)',
       }}>
-        {['Listen', 'Review', 'Confirm'].map((label, i) => {
+        {['Listen', 'Review'].map((label, i) => {
           const stepNum = i + 1
           const active = step >= stepNum
           return (
@@ -261,10 +284,18 @@ export default function VoiceOrder() {
             </div>
           )
         })}
+        {confirmedOrders.length > 0 && (
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <CheckCircle size={14} style={{ color: 'var(--success)' }} />
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--success)' }}>
+              {confirmedOrders.length} order{confirmedOrders.length > 1 ? 's' : ''} placed
+            </span>
+          </div>
+        )}
       </div>
 
-      {/* ── Voice/Text Input — visible in Step 1 AND Step 2 ── */}
-      {step <= 2 && !result?.confirmed && (
+      {/* ── Voice/Text Input — always visible ── */}
+      {step <= 2 && (
         <StaggerReveal className="grid-2" style={{ marginBottom: 24 }} variants={staggerContainer}>
           <motion.div className="card" variants={staggerItem}>
             <div className="card-header">
@@ -340,7 +371,7 @@ export default function VoiceOrder() {
 
       {/* ── Action Feedback Banner ── */}
       <AnimatePresence>
-        {actionFeedback && step === 2 && (
+        {actionFeedback && (
           <motion.div
             initial={{ opacity: 0, y: -10, height: 0 }}
             animate={{ opacity: 1, y: 0, height: 'auto' }}
@@ -379,7 +410,7 @@ export default function VoiceOrder() {
 
       {/* Step 2: Review — with live cart */}
       <AnimatePresence>
-        {result && !result.confirmed && (
+        {result && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -648,36 +679,101 @@ export default function VoiceOrder() {
         )}
       </AnimatePresence>
 
-      {/* Step 3: Confirmed */}
+      {/* ── Confirmed Orders Table ── */}
       <AnimatePresence>
-        {result?.confirmed && (
+        {confirmedOrders.length > 0 && (
           <motion.div
-            className="card" style={{ marginTop: 16, borderColor: 'var(--success)' }}
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+            className="card" style={{ marginTop: 24 }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
           >
-            <div className="card-body" style={{ textAlign: 'center', padding: 32 }}>
-              <motion.div
-                style={{ fontSize: 48, marginBottom: 8 }}
-                initial={{ scale: 0 }}
-                animate={{ scale: [0, 1.2, 1] }}
-                transition={{ duration: 0.5 }}
-              >
-                ✓
-              </motion.div>
-              <p style={{ fontSize: 18, fontFamily: 'var(--font-display)', fontWeight: 900, color: 'var(--success)', marginBottom: 4 }}>
-                Order Confirmed
-              </p>
-              <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>KOT has been sent to the kitchen</p>
-              <motion.button
-                className="btn btn-primary"
-                onClick={handleNewOrder}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-              >
-                Start New Order
-              </motion.button>
+            <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ClipboardList size={14} />
+              <span>Placed Orders</span>
+              <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                {confirmedOrders.length} order{confirmedOrders.length > 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className="card-body" style={{ padding: 0 }}>
+              {confirmedOrders.map((order, orderIdx) => (
+                <motion.div
+                  key={order.id}
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: orderIdx * 0.1 }}
+                  style={{
+                    borderBottom: orderIdx < confirmedOrders.length - 1 ? '2px solid var(--border-mid)' : 'none',
+                  }}
+                >
+                  {/* Order header */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 16px',
+                    background: 'var(--bg-elevated)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <CheckCircle size={14} style={{ color: 'var(--success)' }} />
+                      <span style={{ fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-display)' }}>
+                        {order.id}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        {order.confirmedAt}
+                      </span>
+                      <span style={{ fontSize: 14, fontWeight: 800, fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
+                        ₹{order.order.total}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Order items */}
+                  <table className="data-table" style={{ marginBottom: 0 }}>
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th style={{ textAlign: 'center' }}>Qty</th>
+                        <th style={{ textAlign: 'right' }}>Price</th>
+                        <th style={{ textAlign: 'right' }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {order.items.map((item, idx) => (
+                        <tr key={idx}>
+                          <td style={{ fontSize: 13 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {item.is_veg !== undefined && (
+                                <span style={{
+                                  width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                                  background: item.is_veg ? '#22c55e' : '#ef4444',
+                                }} />
+                              )}
+                              <span>{item.item_name || item.name}</span>
+                            </div>
+                            {item.modifiers?.spice_level && item.modifiers.spice_level !== 'medium' && (
+                              <span style={{
+                                fontSize: 10, padding: '1px 5px', borderRadius: 'var(--radius-full)',
+                                background: 'var(--warning-subtle)', color: 'var(--warning)', marginLeft: 14,
+                              }}>🌶️ {item.modifiers.spice_level}</span>
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{item.quantity}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>₹{item.unit_price}</td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 12 }}>₹{item.line_total}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Order totals */}
+                  <div style={{ padding: '8px 16px', display: 'flex', justifyContent: 'flex-end', gap: 16, fontSize: 12, color: 'var(--text-muted)' }}>
+                    <span>Sub: ₹{order.order.subtotal}</span>
+                    <span>GST: ₹{order.order.tax}</span>
+                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Total: ₹{order.order.total}</span>
+                  </div>
+                </motion.div>
+              ))}
             </div>
           </motion.div>
         )}
@@ -685,7 +781,7 @@ export default function VoiceOrder() {
 
       {/* ── Floating Order Tab ── */}
       <AnimatePresence>
-        {hasCart && !result?.confirmed && (
+        {hasCart && (
           <>
             {/* Floating toggle button */}
             <motion.button
