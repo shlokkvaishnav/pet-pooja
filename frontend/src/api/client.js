@@ -225,6 +225,29 @@ export const getMenuComplexity = () =>
 export const getOperationalMetrics = (days = 30) =>
   getWithCache('/revenue/analytics/operational', { params: _params({ days }), ttlMs: SHORT_CACHE_TTL_MS })
 
+// ── ML Pipeline ──
+
+export const trainMLPipeline = () =>
+  api.post('/revenue/ml/train', null, { params: _params() }).then(r => r.data)
+
+export const getMLStatus = () =>
+  getWithCache('/revenue/ml/status', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+
+export const getMLAov = () =>
+  getWithCache('/revenue/ml/aov', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+
+export const getMLDemand = (daysAhead = 7) =>
+  getWithCache('/revenue/ml/demand', { params: _params({ days_ahead: daysAhead }), ttlMs: SHORT_CACHE_TTL_MS })
+
+export const getMLUpsell = (itemIds = [], topK = 5) =>
+  getWithCache('/revenue/ml/upsell', {
+    params: _params({ item_ids: itemIds.join(','), top_k: topK }),
+    ttlMs: SHORT_CACHE_TTL_MS,
+  })
+
+export const getMLPredictions = () =>
+  getWithCache('/revenue/ml/predictions', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS })
+
 export const transcribeAudio = (audioBlob, sessionId, language = null) => {
   const form = new FormData()
   if (audioBlob) {
