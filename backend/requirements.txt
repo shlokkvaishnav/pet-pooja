@@ -17,6 +17,9 @@ numpy
 # Association rule mining (combo engine - Person D)
 mlxtend
 
+# ML pipeline models (AOV, pricing, demand, upsell)
+scikit-learn>=1.4.0
+
 # Voice -- local STT (runs Whisper on your CPU, no API)
 faster-whisper
 

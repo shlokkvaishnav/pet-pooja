@@ -360,3 +360,21 @@ class VSale(Base):
     total_price = Column(Float)
     order_type = Column(String(20))
     sold_at = Column(DateTime)
+
+
+# ── ML Pipeline Tracking ─────────────────────────
+
+class MLPipelineRun(Base):
+    """Track ML pipeline training runs and model performance metrics."""
+
+    __tablename__ = "ml_pipeline_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True)
+    run_type = Column(String(50), nullable=False)  # 'full', 'aov', 'pricing', 'demand', 'upsell'
+    status = Column(String(20), nullable=False, default="running")  # running, completed, partial, failed
+    model_metrics = Column(JSON, default=dict)  # R², MAE, feature importances, etc.
+    predictions_summary = Column(JSON, default=dict)  # key predictions snapshot
+    orders_used = Column(Integer)  # number of orders in training set
+    training_duration_sec = Column(Float)
+    created_at = Column(DateTime, default=_utcnow)

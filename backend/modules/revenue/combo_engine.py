@@ -23,7 +23,6 @@ import itertools
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
@@ -363,31 +362,18 @@ def _run_ml_pipeline(
 
     logger.info("Total candidate sets (pairs + triples): %d", len(candidate_sets))
 
-    # --- Train ML Model for Pricing and Confidence Scoring (same RF as before) ---
-    base_margin = np.mean([i["cm_pct"] for i in item_info.values()])
-    margin_std = np.std([i["cm_pct"] for i in item_info.values()]) or 5.0
-    seed_val = hash(transactions_raw[0].order_id) % 10000 if transactions_raw else 42
-    np.random.seed(seed_val)
-
-    X_train = np.random.rand(300, 3)  # [correlation_strength, avg_margin, diversity_mult]
-    X_train[:, 0] = X_train[:, 0] * 0.9 + 0.05   # correlation 0.05 – 0.95
-    X_train[:, 1] = X_train[:, 1] * margin_std * 2 + (base_margin - margin_std)
-    X_train[:, 2] = X_train[:, 2] * 0.7 + 0.8    # diversity 0.8 – 1.5
-
-    # Higher correlation → items naturally co-purchased → less discount needed
-    y_discount = 22 - (X_train[:, 0] * 15) + ((X_train[:, 1] - base_margin) / margin_std) * 2
-    y_discount += np.random.normal(0, 1.5, 300)
-    y_discount = np.clip(y_discount, 5, 25)
-
-    # Higher correlation + diversity → higher confidence score
-    y_conf = (X_train[:, 0] * 0.6) + (X_train[:, 2] > 1.1).astype(float) * 0.25 + 0.15
-    y_conf += np.random.normal(0, 0.04, 300)
-    y_conf = np.clip(y_conf, 0.3, 0.99)
-
-    y_train = np.vstack([y_discount, y_conf]).T
-    rf_model = RandomForestRegressor(n_estimators=60, max_depth=6, random_state=42)
-    rf_model.fit(X_train, y_train)
-    logger.info("Trained RF pricer on correlation-derived synthetic training set.")
+    # --- ML-Powered Pricing via bundle_pricer (replaces synthetic RF) ---
+    try:
+        from .bundle_pricer import train_pricing_model, predict_bundle_price
+        pricing_result = train_pricing_model(db)
+        use_ml_pricing = pricing_result.get("status") == "completed"
+        if use_ml_pricing:
+            logger.info("Using ML bundle pricer (trained on %d baskets)", pricing_result.get("training_baskets", 0))
+        else:
+            logger.info("ML pricing skipped (%s) — using rule-based fallback", pricing_result.get("reason", "unknown"))
+    except Exception as e:
+        logger.warning("ML pricing import/train failed: %s — using rule-based fallback", e)
+        use_ml_pricing = False
 
     # Step H: Convert candidate sets → scored combo dicts
     combos = []
@@ -404,28 +390,38 @@ def _run_ml_pipeline(
         total_cost = sum(info["cost"] for info in all_infos)
         avg_margin_all = sum(info["cm_pct"] for info in all_infos) / len(all_infos)
 
-        # RF features: [correlation_strength, avg_margin, diversity]
-        ml_features = np.array([[corr_strength, avg_margin_all, diversity_mult]])
-        ml_predictions = rf_model.predict(ml_features)[0]
-
-        ml_predicted_discount = float(min(max(round(ml_predictions[0], 1), 5.0), 25.0))
-        ml_confidence_score = float(ml_predictions[1])
-
-        combo_score = corr_strength * avg_margin_all * ml_confidence_score * diversity_mult
-
-        discount_factor = 1 - (ml_predicted_discount / 100)
-        suggested_bundle_price = round(individual_total * discount_factor / 5) * 5
-
-        if suggested_bundle_price <= total_cost:
-            suggested_bundle_price = round((total_cost + 10) / 5) * 5
-            ml_predicted_discount = round((1 - suggested_bundle_price / individual_total) * 100, 1)
-
-        expected_margin = round(suggested_bundle_price - total_cost, 2)
-
         # Use actual observed co-occurrence count from baskets as support proxy
         n_orders = len(baskets)
         co_count = sum(1 for items in baskets.values() if all(n in items for n in all_names))
         support_value = co_count / n_orders if n_orders else 0.0
+
+        # Price the combo using ML or rule-based fallback
+        if use_ml_pricing:
+            combo_items = [
+                {"price": info["price"], "cost": info["cost"],
+                 "margin_pct": info["cm_pct"], "category": info["category"]}
+                for info in all_infos
+            ]
+            pricing = predict_bundle_price(
+                combo_items=combo_items,
+                co_occurrence_freq=support_value,
+                target_discount_pct=target_discount_pct,
+            )
+            suggested_bundle_price = pricing["combo_price"]
+            ml_predicted_discount = pricing["discount_pct"]
+            ml_confidence_score = pricing["confidence"]
+            expected_margin = pricing["expected_margin"]
+        else:
+            # Rule-based fallback: apply target discount, clamp above cost
+            discount_factor = 1 - (target_discount_pct / 100)
+            suggested_bundle_price = round(individual_total * discount_factor / 5) * 5
+            if suggested_bundle_price <= total_cost:
+                suggested_bundle_price = round((total_cost + 10) / 5) * 5
+            ml_predicted_discount = round((1 - suggested_bundle_price / individual_total) * 100, 1) if individual_total > 0 else 0
+            ml_confidence_score = 0.5 + corr_strength * 0.3
+            expected_margin = round(suggested_bundle_price - total_cost, 2)
+
+        combo_score = corr_strength * avg_margin_all * ml_confidence_score * diversity_mult
 
         combos.append({
             "name": " + ".join(all_names) + " Combo",
@@ -446,7 +442,7 @@ def _run_ml_pipeline(
     combos = combos[:max_combos]
 
     _save_combos_to_db(db, combos)
-    logger.info("Saved %d correlation-based combo suggestions to DB", len(combos))
+    logger.info("Saved %d combo suggestions to DB (pricing=%s)", len(combos), "ml" if use_ml_pricing else "rule-based")
 
 
 # -- DB Persistence --------------------------------------------------------

@@ -662,3 +662,123 @@ def get_operational_metrics_endpoint(
     except Exception as e:
         logger.exception("Error computing operational metrics")
         raise HTTPException(status_code=500, detail=f"Operational metrics failed: {e}")
+
+
+# ── ML Pipeline Endpoints ──
+
+@router.get("/ml/status")
+def get_ml_status(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/ml/status
+    Returns: last pipeline run info, model metrics, staleness, recommendation.
+    """
+    try:
+        from modules.revenue.ml_pipeline import get_pipeline_status
+        return get_pipeline_status(db, restaurant_id=restaurant_id)
+    except Exception as e:
+        logger.exception("Error getting ML pipeline status")
+        raise HTTPException(status_code=500, detail=f"ML status failed: {e}")
+
+
+@router.post("/ml/train")
+def train_ml_pipeline(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
+    """
+    POST /api/revenue/ml/train
+    Trigger full ML pipeline training (AOV, pricing, demand, upsell).
+    Runs synchronously and returns model metrics for all models.
+    """
+    try:
+        from modules.revenue.ml_pipeline import run_full_pipeline
+        result = run_full_pipeline(db, restaurant_id=restaurant_id)
+        return result
+    except Exception as e:
+        logger.exception("Error training ML pipeline")
+        raise HTTPException(status_code=500, detail=f"ML training failed: {e}")
+
+
+@router.get("/ml/aov")
+def get_ml_aov(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/ml/aov
+    Returns: AOV insights — current AOV, predicted AOV by hour, improvement opportunities.
+    """
+    try:
+        from modules.revenue.aov_predictor import get_aov_insights
+        cache_key = f"ml_aov_{restaurant_id}" if restaurant_id else "ml_aov"
+        return _get_or_compute(cache_key, lambda: get_aov_insights(db, restaurant_id=restaurant_id))
+    except Exception as e:
+        logger.exception("Error getting AOV insights")
+        raise HTTPException(status_code=500, detail=f"AOV insights failed: {e}")
+
+
+@router.get("/ml/demand")
+def get_ml_demand(
+    restaurant_id: int = Query(None),
+    days_ahead: int = Query(7, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    """
+    GET /api/revenue/ml/demand
+    Returns: per-item demand forecasts with trend direction and stockout risks.
+    """
+    try:
+        from modules.revenue.demand_forecaster import get_demand_insights, forecast_demand
+        cache_key = f"ml_demand_{restaurant_id}_{days_ahead}" if restaurant_id else f"ml_demand_{days_ahead}"
+
+        def _compute():
+            insights = get_demand_insights(db, restaurant_id=restaurant_id)
+            forecasts = forecast_demand(db, days_ahead=days_ahead, restaurant_id=restaurant_id)
+            return {**insights, "forecasts": forecasts}
+
+        return _get_or_compute(cache_key, _compute)
+    except Exception as e:
+        logger.exception("Error getting demand forecasts")
+        raise HTTPException(status_code=500, detail=f"Demand forecast failed: {e}")
+
+
+@router.get("/ml/upsell")
+def get_ml_upsell(
+    item_ids: str = Query("", description="Comma-separated item IDs currently in cart"),
+    top_k: int = Query(5, ge=1, le=20),
+    restaurant_id: int = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    GET /api/revenue/ml/upsell?item_ids=1,2,3&top_k=5
+    Returns: ranked upsell recommendations for the given cart items.
+    """
+    try:
+        from modules.revenue.upsell_scorer import score_upsell_candidates
+
+        current_items = []
+        if item_ids:
+            try:
+                current_items = [int(x.strip()) for x in item_ids.split(",") if x.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="item_ids must be comma-separated integers")
+
+        candidates = score_upsell_candidates(
+            db, current_items=current_items, top_k=top_k, restaurant_id=restaurant_id,
+        )
+        return {"current_items": current_items, "upsell_candidates": candidates}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error scoring upsell candidates")
+        raise HTTPException(status_code=500, detail=f"Upsell scoring failed: {e}")
+
+
+@router.get("/ml/predictions")
+def get_ml_predictions(restaurant_id: int = Query(None), db: Session = Depends(get_db)):
+    """
+    GET /api/revenue/ml/predictions
+    Returns: all ML predictions aggregated — AOV, demand, pricing, upsell model status.
+    """
+    try:
+        from modules.revenue.ml_pipeline import get_all_predictions
+        cache_key = f"ml_predictions_{restaurant_id}" if restaurant_id else "ml_predictions"
+        return _get_or_compute(cache_key, lambda: get_all_predictions(db, restaurant_id=restaurant_id))
+    except Exception as e:
+        logger.exception("Error getting ML predictions")
+        raise HTTPException(status_code=500, detail=f"ML predictions failed: {e}")
+
