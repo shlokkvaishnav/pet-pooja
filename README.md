@@ -42,14 +42,10 @@ Built for **hackathons and production**: PostgreSQL (Supabase), optional Redis, 
 
 ## Screenshots
 
-| | |
-|---|---|
-| ![Dashboard](img/Screenshot%202026-03-07%20124959.png) | ![Menu](img/Screenshot%202026-03-07%20125040.png) |
-| *Dashboard* | *Menu analysis* |
-| ![Combo engine](img/Screenshot%202026-03-07%20125220.png) | ![Voice / Web call](img/Screenshot%202026-03-07%20125407.png) |
-| *Combo engine* | *Voice / Web call* |
-| ![Orders / Operations](img/Screenshot%202026-03-07%20125550.png) | |
-| *Orders / Operations* | |
+| | | |
+|---|---|---|
+| ![](img/Screenshot%202026-03-07%20124959.png) | ![](img/Screenshot%202026-03-07%20125040.png) | ![](img/Screenshot%202026-03-07%20125220.png) |
+| ![](img/Screenshot%202026-03-07%20125407.png) | ![](img/Screenshot%202026-03-07%20125550.png) | ![](img/Screenshot%202026-03-07%20124959.png) |
 
 ---
 
