@@ -1,4 +1,4 @@
-﻿"""
+"""
 combo_engine.py — Correlation-Based Combo Generator
 =====================================================
 Uses Pearson/Phi correlation on a boolean purchase basket matrix
@@ -32,6 +32,7 @@ from models import MenuItem, VSale, ComboSuggestion, Category
 _train_lock = threading.Lock()
 _last_trained_order_count = 0
 _training_in_progress = False
+_last_ml_summary: dict | None = None  # Set by _run_ml_pipeline; returned with combos for UI
 
 # Background scheduler interval (env-overridable, default: 86400 = 24h)
 _COMBO_RETRAIN_INTERVAL_SEC = int(os.getenv("COMBO_RETRAIN_INTERVAL_SEC", "86400"))
@@ -115,8 +116,13 @@ def generate_combos(
             )
             _last_trained_order_count = total_orders
 
-    # 2. Return cached combos from the database, filtering out-of-stock items
-    return _fetch_combos_from_db(db)
+    # 2. Return cached combos from the database and last ML run summary for UI
+    return _fetch_combos_from_db(db), _last_ml_summary
+
+
+def get_last_ml_summary() -> dict | None:
+    """Return summary of last combo ML pipeline run for UI (orders_used, pricing_model, etc.)."""
+    return _last_ml_summary
 
 
 def fetch_combos_from_db(db: Session, restaurant_id: int = None) -> list[dict]:
@@ -260,6 +266,8 @@ def _run_ml_pipeline(
 
     if not transactions_raw:
         logger.warning("No transactions found -- cannot generate combos")
+        global _last_ml_summary
+        _last_ml_summary = {"orders_used": 0, "trained": False, "reason": "no_transactions"}
         return
 
     # Step C: Group by order_id and collect item info
@@ -303,6 +311,8 @@ def _run_ml_pipeline(
     except Exception as e:
         logger.error("Correlation matrix failed: %s -- falling back", e)
         _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
+        global _last_ml_summary
+        _last_ml_summary = {"orders_used": len(baskets), "window_size": window_size, "pricing_model": "rule-based", "trained": True, "reason": "correlation_fallback"}
         return
 
     items_list = list(basket_df.columns)
@@ -326,6 +336,8 @@ def _run_ml_pipeline(
     if not candidate_pairs:
         logger.warning("No correlated pairs found -- falling back")
         _save_fallback_combos(db, baskets, item_info, max_combos, target_discount_pct)
+        global _last_ml_summary
+        _last_ml_summary = {"orders_used": len(baskets), "window_size": window_size, "correlation_pairs": 0, "pricing_model": "rule-based", "trained": True, "reason": "no_pairs_fallback"}
         return
 
     # Step G: Build candidate item sets (pairs + triples)
@@ -443,6 +455,16 @@ def _run_ml_pipeline(
 
     _save_combos_to_db(db, combos)
     logger.info("Saved %d combo suggestions to DB (pricing=%s)", len(combos), "ml" if use_ml_pricing else "rule-based")
+
+    global _last_ml_summary
+    _last_ml_summary = {
+        "orders_used": len(baskets),
+        "window_size": window_size,
+        "combos_saved": len(combos),
+        "pricing_model": "ml" if use_ml_pricing else "rule-based",
+        "correlation_pairs": len(candidate_pairs),
+        "trained": True,
+    }
 
 
 # -- DB Persistence --------------------------------------------------------

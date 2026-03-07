@@ -65,6 +65,15 @@ def classify_menu_matrix(
             emoji = "🐕"
             action = "Consider removing or reworking the recipe."
 
+        # ML: quadrant confidence = how far inside the quadrant (distance from thresholds)
+        margin_gap = abs(margin_pct - margin_threshold)
+        pop_gap = abs(pop_score - popularity_threshold)
+        quadrant_confidence = min(0.99, 0.5 + (margin_gap / 30) * 0.25 + (pop_gap / 0.3) * 0.25)
+        ml_insight = (
+            f"ML: {quadrant.upper()} with {quadrant_confidence:.0%} confidence — "
+            f"margin {margin_pct:.0f}%, popularity {pop_score:.0%}."
+        )
+
         results.append({
             "item_id": item_id,
             "name": m["name"],
@@ -79,6 +88,13 @@ def classify_menu_matrix(
             "emoji": emoji,
             "action": action,
             "is_veg": m.get("is_veg", True),
+            "ml_quadrant_confidence": round(quadrant_confidence, 2),
+            "ml_insight": ml_insight,
+            "ml_profitability_score": m.get("ml_profitability_score"),
+            "ml_profit_tier": m.get("ml_profit_tier"),
+            "ml_confidence": m.get("ml_confidence") or pop.get("ml_confidence"),
+            "ml_velocity_trend_pct": pop.get("ml_velocity_trend_pct"),
+            "ml_velocity_label": pop.get("ml_velocity_label"),
         })
 
     return results

@@ -94,11 +94,10 @@ def _build_user_prompt(
         original = pending_disambiguation.get("original_item_name", "?")
         prompt += (
             f'CRITICAL: The agent asked "which {original}?" and the customer is answering. '
-            f'Options: {", ".join(alt_names)}. '
-            f'The cart ALREADY has other items (see Current cart below). '
-            f'Return intent=ORDER with ONLY the ONE item the customer chose. '
-            f'Do NOT return CANCEL. Do NOT remove or replace existing cart items. '
-            f'Only ADD the chosen variant.\n\n'
+            f'Valid options are ONLY: {", ".join(alt_names)}. '
+            f'Return intent=ORDER with items containing EXACTLY ONE item from that list — the one the customer chose. '
+            f'Do NOT return any item that is not in the options list. Do NOT return CANCEL. '
+            f'The cart already has other items — you are ONLY adding the chosen variant, never replacing the cart.\n\n'
         )
 
     prompt += f'Customer said: "{transcript}"\n\n'

@@ -426,6 +426,7 @@ export default function MenuAnalysis() {
                     <th style={{ textAlign: 'right' }}>CM%</th>
                     <th>Tier</th>
                     <th>Quadrant</th>
+                    <th>ML</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -442,6 +443,14 @@ export default function MenuAnalysis() {
                         <td className="col-number" style={{ fontWeight: 700, color: tierColor, fontFamily: 'var(--font-mono)' }}>{m.toFixed(1)}%</td>
                         <td><span className="profitability-tier-badge" style={{ '--tier-color': tierColor }}>{tier}</span></td>
                         <td style={{ fontSize: 12, textTransform: 'capitalize' }}>{item.quadrant}</td>
+                        <td>
+                          {(item.ml_profitability_score != null || item.ml_profit_tier) && (
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                              {item.ml_profitability_score != null && <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{item.ml_profitability_score}</span>}
+                              {item.ml_profit_tier && <span style={{ marginLeft: 4, background: 'color-mix(in srgb, var(--info) 15%, transparent)', padding: '1px 6px', borderRadius: 4 }}>ML {item.ml_profit_tier}</span>}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     )
                   })}
@@ -479,6 +488,7 @@ export default function MenuAnalysis() {
                     <th>Trend</th>
                     <th style={{ textAlign: 'right' }}>CM%</th>
                     <th>Quadrant</th>
+                    <th>ML</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -487,6 +497,9 @@ export default function MenuAnalysis() {
                     const tier = pop >= 0.6 ? 'High' : pop >= 0.3 ? 'Medium' : 'Low'
                     const tierColor = pop >= 0.6 ? 'var(--success)' : pop >= 0.3 ? 'var(--warning)' : 'var(--danger)'
                     const m = item.margin_pct || item.cm_percent || 0
+                    const velLabel = item.ml_velocity_label
+                    const velPct = item.ml_velocity_trend_pct
+                    const mlConf = item.ml_confidence
                     return (
                       <tr key={item.item_id}>
                         <td style={{ color: 'var(--text-muted)', fontSize: 11 }}>{idx + 1}</td>
@@ -514,6 +527,15 @@ export default function MenuAnalysis() {
                           {m.toFixed(1)}%
                         </td>
                         <td style={{ fontSize: 12, textTransform: 'capitalize' }}>{item.quadrant}</td>
+                        <td>
+                          {(velLabel != null || velPct != null || mlConf != null) && (
+                            <span style={{ fontSize: 11, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              {velPct != null && <span style={{ fontFamily: 'var(--font-mono)', color: velPct > 0 ? 'var(--success)' : velPct < 0 ? 'var(--danger)' : 'var(--text-muted)' }}>{velPct > 0 ? '+' : ''}{velPct}% 7d</span>}
+                              {velLabel && <span style={{ background: 'color-mix(in srgb, var(--info) 15%, transparent)', padding: '1px 6px', borderRadius: 4 }}>ML {velLabel.replace('_', ' ')}</span>}
+                              {mlConf != null && <span style={{ color: 'var(--text-muted)' }}>{(mlConf * 100).toFixed(0)}% conf</span>}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     )
                   })}
@@ -553,6 +575,7 @@ export default function MenuAnalysis() {
                     <th style={{ textAlign: 'right' }}>Expected CM Impact</th>
                     <th style={{ textAlign: 'right' }}>Expected Volume Impact</th>
                     <th>Confidence</th>
+                    <th>ML</th>
                     <th>Action</th>
                   </tr>
                 </thead>
@@ -565,6 +588,13 @@ export default function MenuAnalysis() {
                       <td className="col-number" style={{ color: String(row.expected_cm_impact).includes('+') ? 'var(--success)' : 'var(--text-secondary)' }}>{row.expected_cm_impact}</td>
                       <td className="col-number" style={{ color: String(row.expected_volume_impact).includes('+') ? 'var(--success)' : 'var(--text-secondary)' }}>{row.expected_volume_impact}</td>
                       <td>{row.confidence_level}</td>
+                      <td>
+                        {(row.ml_opportunity_score != null || row.ml_badge) && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, background: 'color-mix(in srgb, var(--info) 18%, transparent)', color: 'var(--info)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
+                            ML {row.ml_badge || (row.ml_opportunity_score != null ? `${(row.ml_opportunity_score * 100).toFixed(0)}%` : '')}
+                          </span>
+                        )}
+                      </td>
                       <td>
                         <button
                           className={acknowledged[row.id] ? 'btn btn-secondary' : 'btn btn-ghost'}

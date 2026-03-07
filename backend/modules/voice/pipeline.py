@@ -267,7 +267,22 @@ class VoicePipeline:
                         name_to_item = {
                             m.name.lower(): m for m in self.menu_items if m.name
                         }
-                        for ri in router_result.get("items", []):
+                        router_items = router_result.get("items", [])
+                        # When resolving disambiguation: only allow items that are in the alternatives list (never replace cart with wrong items)
+                        if pending_disambig and router_items:
+                            alt_names_lower = {
+                                a.get("item_name", "").strip().lower()
+                                for a in pending_disambig.get("alternatives", [])
+                            }
+                            router_items = [
+                                ri for ri in router_items
+                                if (ri.get("name") or "").strip().lower() in alt_names_lower
+                            ]
+                            if not router_items and router_result.get("items"):
+                                logger.warning(
+                                    "LLM returned disambiguation items not in options — ignoring to preserve cart"
+                                )
+                        for ri in router_items:
                             name = ri.get("name", "").strip()
                             qty = ri.get("quantity", 1)
                             db_item = name_to_item.get(name.lower())
@@ -338,6 +353,7 @@ class VoicePipeline:
         # ═══════════════════════════════════════════════════════════════════
         # Stage 3+: Regex + FAISS fallback (only if router didn't handle it)
         # ═══════════════════════════════════════════════════════════════════
+        _disambig_chosen_enriched = None  # Set in Stage 3c when user resolves "which X?" — add that item only
         if not _used_llm_router:
             # Stage 3: Compound intent classification
             intent_results = classify_intents(normalized)
@@ -368,7 +384,7 @@ class VoicePipeline:
             # When the agent asked "which biryani?" and the user says "veg biryani"
             # (a bare item name with no ORDER keyword), the regex returns UNKNOWN.
             # Detect this case and force ORDER intent if the user's response matches
-            # any menu item or disambiguation alternative.
+            # any menu item or disambiguation alternative. ADD the chosen item only — never replace cart.
             if primary_intent == "UNKNOWN" and session_id:
                 pending_disambig_ctx = get_pending_disambiguation(session_id)
                 if pending_disambig_ctx:
@@ -387,6 +403,24 @@ class VoicePipeline:
                             logger.info("Disambiguation resolved: '%s' -> ORDER (matched '%s')",
                                        normalized, alt.get("item_name"))
                             clear_pending_disambiguation(session_id)
+                            # Build enriched item so it gets merged into cart (add-only, never replace)
+                            db_item = menu_map.get(alt.get("item_id"))
+                            if db_item:
+                                _disambig_chosen_enriched = [{
+                                    "item_id": db_item.id,
+                                    "item_name": db_item.name,
+                                    "quantity": 1,
+                                    "unit_price": db_item.selling_price,
+                                    "line_total": db_item.selling_price,
+                                    "modifiers": {},
+                                    "confidence": 0.95,
+                                    "needs_disambiguation": False,
+                                    "alternatives": [],
+                                    "clause_intent": "ORDER",
+                                    "clause": normalized,
+                                    "source": "disambig_resolution",
+                                    "is_veg": getattr(db_item, "is_veg", None),
+                                }]
                             break
                     # Also check against full menu (user might say exact item name)
                     if primary_intent == "UNKNOWN":
@@ -401,6 +435,22 @@ class VoicePipeline:
                                 logger.info("Disambiguation menu match: '%s' -> ORDER (matched '%s')",
                                            normalized, mi.name)
                                 clear_pending_disambiguation(session_id)
+                                if (restaurant_id is None or getattr(mi, "restaurant_id", None) is None or mi.restaurant_id == restaurant_id):
+                                    _disambig_chosen_enriched = [{
+                                        "item_id": mi.id,
+                                        "item_name": mi.name,
+                                        "quantity": 1,
+                                        "unit_price": mi.selling_price,
+                                        "line_total": mi.selling_price,
+                                        "modifiers": {},
+                                        "confidence": 0.95,
+                                        "needs_disambiguation": False,
+                                        "alternatives": [],
+                                        "clause_intent": "ORDER",
+                                        "clause": normalized,
+                                        "source": "disambig_menu_match",
+                                        "is_veg": getattr(mi, "is_veg", None),
+                                    }]
                                 break
 
         # Stage 4-5: Process each clause independently (regex/FAISS path)
@@ -435,20 +485,22 @@ class VoicePipeline:
                             user_messages.append(_query_answer)
 
                 elif clause_intent in ("ORDER", "CANCEL"):
-                    clause_matched = extract_all_items(clause, self.corpus)
-                    clause_with_qty = extract_quantities_for_items(clause, clause_matched)
-
-                    clause_with_mods = []
-                    for item in clause_with_qty:
-                        mods = extract_modifiers(clause, item["item_id"], self.menu_items)
-                        # Collect modifier warnings
-                        for w in mods.get("warnings", []):
-                            sr = errs.modifier_unsupported(w["modifier"], w["item_name"])
-                            stage_results.append(sr.to_dict())
-                            user_messages.append(sr.user_message)
-                        clause_with_mods.append({**item, "modifiers": mods})
-
-                    enriched = self._enrich_with_menu_data(clause_with_mods, restaurant_id=restaurant_id)
+                    # When we resolved disambiguation in Stage 3c, use the chosen item only — do not re-extract (would get wrong/nothing)
+                    if clause_intent == "ORDER" and _disambig_chosen_enriched is not None:
+                        enriched = list(_disambig_chosen_enriched)
+                        _disambig_chosen_enriched = None
+                    else:
+                        clause_matched = extract_all_items(clause, self.corpus)
+                        clause_with_qty = extract_quantities_for_items(clause, clause_matched)
+                        clause_with_mods = []
+                        for item in clause_with_qty:
+                            mods = extract_modifiers(clause, item["item_id"], self.menu_items)
+                            for w in mods.get("warnings", []):
+                                sr = errs.modifier_unsupported(w["modifier"], w["item_name"])
+                                stage_results.append(sr.to_dict())
+                                user_messages.append(sr.user_message)
+                            clause_with_mods.append({**item, "modifiers": mods})
+                        enriched = self._enrich_with_menu_data(clause_with_mods, restaurant_id=restaurant_id)
 
                     # Check stock availability for ORDER items
                     if clause_intent == "ORDER":

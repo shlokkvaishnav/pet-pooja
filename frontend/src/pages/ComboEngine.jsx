@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { motion } from 'motion/react'
-import { getCombos, getDashboardMetrics, getMenuMatrix, promoteCombo as promoteComboApi, trainMLPipeline, getMLStatus, getMLAov, getMLDemand } from '../api/client'
+import { getCombos, getDashboardMetrics, getMenuMatrix, promoteCombo as promoteComboApi } from '../api/client'
 import { formatPct, formatRupees } from '../utils/format'
 import { buildComboInsights } from '../utils/revenueInsights'
 import { useTranslation } from '../context/LanguageContext'
@@ -22,33 +22,6 @@ function ComboSkeleton() {
   )
 }
 
-/* ── ML Pipeline Status Badge ── */
-function PipelineStatusBadge({ status }) {
-  if (!status || status === 'never_run') {
-    return <span className="tag" style={{ background: 'var(--bg-overlay)', color: 'var(--text-muted)' }}>Not Trained</span>
-  }
-  const colors = {
-    completed: { bg: 'rgba(52,211,153,0.15)', color: 'var(--success)' },
-    partial: { bg: 'rgba(251,191,36,0.15)', color: 'var(--warning)' },
-    running: { bg: 'rgba(96,165,250,0.15)', color: 'var(--accent)' },
-    failed: { bg: 'rgba(248,113,113,0.15)', color: 'var(--danger)' },
-  }
-  const style = colors[status] || colors.partial
-  return <span className="tag" style={{ background: style.bg, color: style.color, fontWeight: 600 }}>{status}</span>
-}
-
-/* ── Staleness indicator ── */
-function StalenessTag({ staleness }) {
-  if (!staleness) return null
-  const styles = {
-    fresh: { bg: 'rgba(52,211,153,0.12)', color: 'var(--success)', label: '● Fresh' },
-    aging: { bg: 'rgba(251,191,36,0.12)', color: 'var(--warning)', label: '● Aging' },
-    stale: { bg: 'rgba(248,113,113,0.12)', color: 'var(--danger)', label: '● Stale' },
-  }
-  const s = styles[staleness] || styles.stale
-  return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius-full)', background: s.bg, color: s.color, fontWeight: 600 }}>{s.label}</span>
-}
-
 export default function ComboEngine() {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
@@ -58,12 +31,7 @@ export default function ComboEngine() {
   const [totalOrders, setTotalOrders] = useState(0)
   const [promotedIds, setPromotedIds] = useState([])
   const [error, setError] = useState(null)
-
-  // ML pipeline state
-  const [mlStatus, setMlStatus] = useState(null)
-  const [aovData, setAovData] = useState(null)
-  const [demandData, setDemandData] = useState(null)
-  const [mlTraining, setMlTraining] = useState(false)
+  const [mlSummary, setMlSummary] = useState(null)  // From combo API: trained on N orders, pricing model, etc.
   const [activeTab, setActiveTab] = useState('combos')
 
   const loadCombos = useCallback((forceRetrain = false) => {
@@ -78,6 +46,7 @@ export default function ComboEngine() {
     ])
       .then(([comboData, matrixData, dashboard]) => {
         setCombosRaw(comboData?.combos || comboData || [])
+        setMlSummary(comboData?.ml_summary ?? null)
         setMenuItems(matrixData?.items || [])
         setTotalOrders(dashboard?.total_orders || 0)
       })
@@ -90,35 +59,9 @@ export default function ComboEngine() {
       })
   }, [])
 
-  const loadMLData = useCallback(() => {
-    Promise.allSettled([
-      getMLStatus(),
-      getMLAov(),
-      getMLDemand(7),
-    ]).then(([statusRes, aovRes, demandRes]) => {
-      if (statusRes.status === 'fulfilled') setMlStatus(statusRes.value)
-      if (aovRes.status === 'fulfilled') setAovData(aovRes.value)
-      if (demandRes.status === 'fulfilled') setDemandData(demandRes.value)
-    })
-  }, [])
-
   useEffect(() => {
     loadCombos()
-    loadMLData()
-  }, [loadCombos, loadMLData])
-
-  const handleTrainPipeline = async () => {
-    setMlTraining(true)
-    try {
-      await trainMLPipeline()
-      loadMLData()
-      loadCombos(true)
-    } catch (err) {
-      console.error('ML training failed:', err)
-    } finally {
-      setMlTraining(false)
-    }
-  }
+  }, [loadCombos])
 
   const insights = useMemo(() => buildComboInsights({
     combos: combosRaw,
@@ -154,10 +97,9 @@ export default function ComboEngine() {
 
   const summary = insights.summary
   const hasCombos = insights.combos.length > 0
-  const pipelineRun = mlStatus?.last_run
   const tabs = [
     { id: 'combos', label: 'Combo Suggestions', icon: '🎯' },
-    { id: 'ml', label: 'ML Intelligence', icon: '🧠' },
+    { id: 'ml', label: 'Combo Insights', icon: '📊' },
   ]
 
   return (
@@ -182,37 +124,25 @@ export default function ComboEngine() {
           >
             {refreshing ? 'Retraining…' : '⟳ Refresh Combos'}
           </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleTrainPipeline}
-            disabled={mlTraining}
-            style={{ whiteSpace: 'nowrap' }}
-          >
-            {mlTraining ? '⏳ Training ML…' : '🧠 Train ML Pipeline'}
-          </button>
         </div>
       </div>
 
-      {/* ML Pipeline Status Bar */}
-      {mlStatus && (
+      {/* ML trained on data — summary from combo pipeline (no manual train button) */}
+      {mlSummary && (
         <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
           <div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>ML Pipeline</span>
-              <PipelineStatusBadge status={mlStatus.status} />
-              <StalenessTag staleness={mlStatus.staleness} />
+              <span style={{ fontSize: 13, fontWeight: 600 }}>ML insights</span>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {mlSummary.trained
+                  ? `Trained on ${mlSummary.orders_used ?? 0} orders · ${mlSummary.correlation_pairs ?? 0} correlation pairs · ${mlSummary.combos_saved ?? 0} combos · pricing: ${mlSummary.pricing_model ?? 'rule-based'}`
+                  : mlSummary.reason === 'no_transactions'
+                    ? 'Place orders to train the combo model automatically.'
+                    : 'Model will train automatically when you refresh with order data.'}
+              </span>
             </div>
-            {pipelineRun && (
-              <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-muted)' }}>
-                <span>Orders: <strong style={{ color: 'var(--text-primary)' }}>{pipelineRun.orders_used || 0}</strong></span>
-                <span>Duration: <strong style={{ color: 'var(--text-primary)' }}>{pipelineRun.training_duration_sec?.toFixed(1)}s</strong></span>
-                {pipelineRun.age_hours != null && (
-                  <span>Age: <strong style={{ color: 'var(--text-primary)' }}>{pipelineRun.age_hours < 1 ? '<1h' : `${pipelineRun.age_hours.toFixed(0)}h`}</strong></span>
-                )}
-              </div>
-            )}
-            {mlStatus.recommendation && (
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>{mlStatus.recommendation}</div>
+            {mlSummary.window_size != null && (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Window: last {mlSummary.window_size} orders</span>
             )}
           </div>
         </div>
@@ -340,278 +270,76 @@ export default function ComboEngine() {
         </>
       )}
 
-      {/* ── TAB: ML Intelligence ── */}
+      {/* ── TAB: Combo Insights ── */}
       {activeTab === 'ml' && (
         <>
-          {/* AOV Insights */}
           <section style={{ marginBottom: 'var(--space-6)' }}>
             <h2 style={{ marginBottom: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 8 }}>
-              📊 AOV Insights
-              {aovData?.model_metrics && (
-                <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>
-                  Model R² = {aovData.model_metrics.cv_r2}
-                </span>
-              )}
+              📊 Combo insights
             </h2>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 'var(--space-4)' }}>
+              Insights are produced automatically from your order data: correlation (Phi/Pearson) finds items ordered together, then bundle pricing uses the trained model or rule-based fallback. No manual training — refresh combos to retrain on latest orders.
+            </p>
 
-            {!aovData || aovData.current_aov === undefined ? (
-              <div className="card">
-                <div className="card-body" style={{ textAlign: 'center', padding: 'var(--space-6)', color: 'var(--text-muted)' }}>
-                  No AOV data available. Click <strong>Train ML Pipeline</strong> to generate predictions.
-                </div>
+            {mlSummary?.trained ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 'var(--space-3)', marginBottom: 'var(--space-5)' }}>
+                <div className="card"><div className="card-body" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Orders used</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent)' }}>{mlSummary.orders_used ?? 0}</div>
+                </div></div>
+                <div className="card"><div className="card-body" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Correlation pairs</div>
+                  <div style={{ fontSize: 22, fontWeight: 800 }}>{mlSummary.correlation_pairs ?? 0}</div>
+                </div></div>
+                <div className="card"><div className="card-body" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Combos saved</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--success)' }}>{mlSummary.combos_saved ?? 0}</div>
+                </div></div>
+                <div className="card"><div className="card-body" style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pricing</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: mlSummary.pricing_model === 'ml' ? 'var(--success)' : 'var(--text-secondary)' }}>{mlSummary.pricing_model === 'ml' ? 'ML' : 'Rule-based'}</div>
+                </div></div>
               </div>
             ) : (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-                  <div className="card"><div className="card-body">
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Current AOV</div>
-                    <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)' }}>{formatRupees(aovData.current_aov)}</div>
-                  </div></div>
-                  <div className="card"><div className="card-body">
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Orders (30d)</div>
-                    <div style={{ fontSize: 24, fontWeight: 800 }}>{aovData.total_orders_30d}</div>
-                  </div></div>
-                  <div className="card"><div className="card-body">
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Min Order</div>
-                    <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-secondary)' }}>{formatRupees(aovData.min_order_value)}</div>
-                  </div></div>
-                  <div className="card"><div className="card-body">
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Max Order</div>
-                    <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--success)' }}>{formatRupees(aovData.max_order_value)}</div>
-                  </div></div>
-                </div>
-
-                {/* AOV by Hour */}
-                {aovData.aov_by_hour?.length > 0 && (
-                  <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
-                    <div className="card-header"><span style={{ fontWeight: 600 }}>AOV by Hour</span></div>
-                    <div className="card-body" style={{ overflowX: 'auto' }}>
-                      <div style={{ display: 'flex', gap: 0, alignItems: 'flex-end', height: 120, minWidth: aovData.aov_by_hour.length * 40 }}>
-                        {aovData.aov_by_hour.map((h) => {
-                          const maxAov = Math.max(...aovData.aov_by_hour.map(x => x.actual_aov))
-                          const barHeight = maxAov > 0 ? (h.actual_aov / maxAov * 100) : 0
-                          return (
-                            <div key={h.hour} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                              <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-primary)' }}>{formatRupees(h.actual_aov)}</span>
-                              <div style={{
-                                width: '60%', height: `${barHeight}%`, minHeight: 4,
-                                background: 'linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 60%, transparent))',
-                                borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
-                                transition: 'height 0.3s',
-                              }} />
-                              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{h.label}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* AOV by Order Type */}
-                {aovData.aov_by_order_type?.length > 0 && (
-                  <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
-                    <div className="card-header"><span style={{ fontWeight: 600 }}>AOV by Order Type</span></div>
-                    <div className="card-body">
-                      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(aovData.aov_by_order_type.length, 4)}, 1fr)`, gap: 'var(--space-3)' }}>
-                        {aovData.aov_by_order_type.map((ot) => (
-                          <div key={ot.type} style={{ textAlign: 'center', padding: 'var(--space-3)', background: 'var(--bg-overlay)', borderRadius: 'var(--radius-sm)' }}>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'capitalize', marginBottom: 4 }}>{ot.type.replace(/_/g, ' ')}</div>
-                            <div style={{ fontSize: 20, fontWeight: 700 }}>{formatRupees(ot.aov)}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{ot.order_count} orders</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Improvement Opportunities */}
-                {aovData.improvement_opportunities?.length > 0 && (
-                  <div className="card">
-                    <div className="card-header"><span style={{ fontWeight: 600 }}>💡 Improvement Opportunities</span></div>
-                    <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                      {aovData.improvement_opportunities.map((opp, idx) => (
-                        <div key={idx} style={{ padding: 'var(--space-3)', background: 'var(--bg-overlay)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--accent)' }}>
-                          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{opp.title}</div>
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{opp.description}</div>
-                          <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600, marginTop: 4 }}>Potential lift: +{opp.potential_lift_pct}%</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
-
-          {/* Demand Forecasts */}
-          <section style={{ marginBottom: 'var(--space-6)' }}>
-            <h2 style={{ marginBottom: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 8 }}>
-              📈 Demand Forecasts (7-day)
-              {demandData?.model_metrics && (
-                <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-muted)' }}>
-                  Model R² = {demandData.model_metrics.cv_r2}
-                </span>
-              )}
-            </h2>
-
-            {!demandData?.forecasts?.length && !demandData?.rising_items?.length ? (
-              <div className="card">
+              <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
                 <div className="card-body" style={{ textAlign: 'center', padding: 'var(--space-6)', color: 'var(--text-muted)' }}>
-                  No demand data available. Click <strong>Train ML Pipeline</strong> to generate forecasts.
+                  {totalOrders === 0 ? 'No orders yet. Place orders and refresh combos to train the model automatically.' : 'Refresh combos to run the ML pipeline on your latest order data.'}
                 </div>
+              </div>
+            )}
+
+            <h3 style={{ marginBottom: 'var(--space-3)', fontSize: 14, fontWeight: 700 }}>Per-combo metrics (confidence, lift, support)</h3>
+            {insights.combos.length === 0 ? (
+              <div className="card">
+                <div className="card-body" style={{ color: 'var(--text-muted)', fontSize: 13 }}>No combos yet. Refresh combos to generate suggestions from your data.</div>
               </div>
             ) : (
-              <>
-                {/* Rising / Falling items */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-                  <div className="card">
-                    <div className="card-header"><span style={{ fontWeight: 600, color: 'var(--success)' }}>🔥 Rising Items</span></div>
-                    <div className="card-body">
-                      {(demandData?.rising_items || []).length === 0 ? (
-                        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No rising items detected</div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          {(demandData?.rising_items || []).slice(0, 5).map((item) => (
-                            <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
-                              <span>{item.item_name}</span>
-                              <span style={{ color: 'var(--success)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>+{item.trend_pct?.toFixed(0)}%</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="card">
-                    <div className="card-header"><span style={{ fontWeight: 600, color: 'var(--danger)' }}>📉 Falling Items</span></div>
-                    <div className="card-body">
-                      {(demandData?.falling_items || []).length === 0 ? (
-                        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No falling items detected</div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          {(demandData?.falling_items || []).slice(0, 5).map((item) => (
-                            <div key={item.item_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
-                              <span>{item.item_name}</span>
-                              <span style={{ color: 'var(--danger)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{item.trend_pct?.toFixed(0)}%</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Top Items Forecast Table */}
-                {demandData?.forecasts?.length > 0 && (
-                  <div className="card">
-                    <div className="card-header"><span style={{ fontWeight: 600 }}>Top Items — Predicted Demand</span></div>
-                    <div className="card-body" style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                        <thead>
-                          <tr style={{ borderBottom: '1px solid var(--border-dim)' }}>
-                            <th style={{ textAlign: 'left', padding: '8px 12px', color: 'var(--text-muted)', fontWeight: 500, fontSize: 11, textTransform: 'uppercase' }}>Item</th>
-                            <th style={{ textAlign: 'right', padding: '8px 12px', color: 'var(--text-muted)', fontWeight: 500, fontSize: 11, textTransform: 'uppercase' }}>Last 7d Avg</th>
-                            <th style={{ textAlign: 'right', padding: '8px 12px', color: 'var(--text-muted)', fontWeight: 500, fontSize: 11, textTransform: 'uppercase' }}>Predicted/day</th>
-                            <th style={{ textAlign: 'right', padding: '8px 12px', color: 'var(--text-muted)', fontWeight: 500, fontSize: 11, textTransform: 'uppercase' }}>7d Total</th>
-                            <th style={{ textAlign: 'center', padding: '8px 12px', color: 'var(--text-muted)', fontWeight: 500, fontSize: 11, textTransform: 'uppercase' }}>Trend</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {demandData.forecasts.slice(0, 15).map((item) => {
-                            const trendColor = item.trend === 'rising' ? 'var(--success)' : item.trend === 'falling' ? 'var(--danger)' : 'var(--text-muted)'
-                            const trendIcon = item.trend === 'rising' ? '↑' : item.trend === 'falling' ? '↓' : '→'
-                            return (
-                              <tr key={item.item_id} style={{ borderBottom: '1px solid var(--border-dim)' }}>
-                                <td style={{ padding: '8px 12px', fontWeight: 500 }}>{item.item_name}</td>
-                                <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{item.last_7d_avg}</td>
-                                <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{item.predicted_daily_qty}</td>
-                                <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{item.predicted_total_qty}</td>
-                                <td style={{ padding: '8px 12px', textAlign: 'center', color: trendColor, fontWeight: 600 }}>{trendIcon} {item.trend_pct?.toFixed(0)}%</td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Stockout Risks */}
-                {demandData?.stockout_risks?.length > 0 && (
-                  <div className="card" style={{ marginTop: 'var(--space-4)', borderColor: 'var(--danger)' }}>
-                    <div className="card-header"><span style={{ fontWeight: 600, color: 'var(--danger)' }}>⚠️ Stockout Risks</span></div>
-                    <div className="card-body">
-                      {demandData.stockout_risks.map((risk) => (
-                        <div key={risk.item_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-dim)', fontSize: 13 }}>
-                          <span>{risk.item_name}</span>
-                          <span style={{ color: risk.urgency === 'critical' ? 'var(--danger)' : 'var(--warning)', fontWeight: 600 }}>
-                            {risk.days_until_stockout} days left ({risk.urgency})
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
+              <div className="card" style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border-strong)' }}>
+                      <th style={{ textAlign: 'left', padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' }}>Combo</th>
+                      <th style={{ textAlign: 'right', padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' }}>Confidence</th>
+                      <th style={{ textAlign: 'right', padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' }}>Lift (corr)</th>
+                      <th style={{ textAlign: 'right', padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' }}>Support</th>
+                      <th style={{ textAlign: 'right', padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600, fontSize: 11, textTransform: 'uppercase' }}>Occurrences</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {insights.combos.map((combo) => (
+                      <tr key={combo.id} style={{ borderBottom: '1px solid var(--border-dim)' }}>
+                        <td style={{ padding: '10px 12px', fontWeight: 500 }}>{combo.itemNames.join(' + ')}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{(Number(combo.confidence) * 100).toFixed(1)}%</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{Number(combo.lift).toFixed(3)}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{(Number(combo.support) * 100).toFixed(2)}%</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{combo.occurrenceCount ?? 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
-
-          {/* Model Performance */}
-          {pipelineRun?.model_metrics && (
-            <section>
-              <h2 style={{ marginBottom: 'var(--space-3)' }}>🔬 Model Performance</h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 'var(--space-3)' }}>
-                {Object.entries(pipelineRun.model_metrics).map(([model, metrics]) => {
-                  const status = metrics?.status || 'unknown'
-                  const statusColors = {
-                    completed: 'var(--success)', skipped: 'var(--warning)', failed: 'var(--danger)',
-                  }
-                  return (
-                    <div key={model} className="card">
-                      <div className="card-body">
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                          <span style={{ fontWeight: 700, fontSize: 13, textTransform: 'capitalize' }}>{model}</span>
-                          <span style={{ fontSize: 10, fontWeight: 600, color: statusColors[status] || 'var(--text-muted)' }}>{status}</span>
-                        </div>
-                        {metrics?.cv_r2 !== undefined && (
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                            R² = <strong>{metrics.cv_r2}</strong>
-                          </div>
-                        )}
-                        {metrics?.mae !== undefined && (
-                          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                            MAE = <strong>{metrics.mae}</strong>
-                          </div>
-                        )}
-                        {metrics?.training_samples !== undefined && (
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                            {metrics.training_samples} samples
-                          </div>
-                        )}
-                        {metrics?.training_baskets !== undefined && (
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                            {metrics.training_baskets} baskets
-                          </div>
-                        )}
-                        {metrics?.total_baskets !== undefined && (
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                            {metrics.total_baskets} baskets
-                          </div>
-                        )}
-                        {metrics?.reason && (
-                          <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 4 }}>
-                            {metrics.reason.replace(/_/g, ' ')}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-          )}
         </>
       )}
     </motion.div>

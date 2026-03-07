@@ -117,6 +117,23 @@ export default function HiddenStars() {
                       <div className="hs-stat-value">{formatRupees(item.selling_price)}</div>
                     </div>
                   </div>
+                  {(item.ml_confidence != null || item.ml_tier) && (
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                      {item.ml_confidence != null && (
+                        <span style={{ fontSize: 10, background: 'color-mix(in srgb, var(--info) 18%, transparent)', color: 'var(--info)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
+                          ML {(item.ml_confidence * 100).toFixed(0)}% conf
+                        </span>
+                      )}
+                      {item.ml_tier && (
+                        <span style={{ fontSize: 10, textTransform: 'capitalize', color: 'var(--text-secondary)' }}>{item.ml_tier.replace(/_/g, ' ')}</span>
+                      )}
+                      {item.ml_velocity_trend_pct != null && (
+                        <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: item.ml_velocity_trend_pct > 0 ? 'var(--success)' : 'var(--text-muted)' }}>
+                          {item.ml_velocity_trend_pct > 0 ? '+' : ''}{item.ml_velocity_trend_pct}% 7d
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   {item.suggestions && item.suggestions.length > 0 && (
                     <div className="hs-suggestions">

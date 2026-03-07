@@ -305,6 +305,7 @@ export function buildPriceOpportunities({
         apiCmImpact = `+${Math.round(priceDelta * 0.4)}% to +${Math.round(priceDelta * 0.9)}%`
         apiVolImpact = `-${Math.round(priceDelta * 0.3)}% to +${Math.max(1, Math.round(priceDelta * 0.2))}%`
       }
+      const mlScore = num(rec.ml_opportunity_score, num(rec.confidence))
       opportunities.push({
         id: `api-${rec.item_id || rec.name}`,
         item_name: rec.name || rec.item_name || 'Menu Item',
@@ -317,6 +318,8 @@ export function buildPriceOpportunities({
         expected_cm_impact: apiCmImpact,
         expected_volume_impact: apiVolImpact,
         confidence_level: confidenceLevel(num(rec.confidence)),
+        ml_opportunity_score: mlScore,
+        ml_badge: mlScore >= 0.7 ? 'High' : mlScore >= 0.45 ? 'Medium' : 'Low',
       })
     }
   }

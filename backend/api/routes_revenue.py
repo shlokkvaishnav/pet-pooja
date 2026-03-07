@@ -1,4 +1,4 @@
-﻿"""
+"""
 routes_revenue.py — Revenue Intelligence API Endpoints
 ========================================================
 /api/revenue/* — Dashboard, menu matrix, hidden stars, risks,
@@ -306,15 +306,18 @@ def get_combo_suggestions(
     SYNCHRONOUSLY so the response always contains combos.
     """
     try:
-        combos = fetch_combos_from_db(db, restaurant_id=restaurant_id)
+        from modules.revenue.combo_engine import get_last_ml_summary
 
-        # If empty or force retrain, run pipeline inline (synchronous)
+        combos = fetch_combos_from_db(db, restaurant_id=restaurant_id)
+        ml_summary = get_last_ml_summary()
+
+        # If empty or force retrain, run pipeline inline (synchronous) — ML trains on data automatically
         if force_retrain or len(combos) == 0:
             logger.info("Running combo pipeline inline (force=%s, existing=%d)", force_retrain, len(combos))
-            generate_combos(db, force_retrain=True)
+            _, ml_summary = generate_combos(db, force_retrain=True)
             combos = fetch_combos_from_db(db, restaurant_id=restaurant_id)
 
-        return {"combos": combos}
+        return {"combos": combos, "ml_summary": ml_summary}
     except Exception as e:
         logger.exception("Error fetching combos")
         raise HTTPException(status_code=500, detail=f"Combo fetch failed: {e}")

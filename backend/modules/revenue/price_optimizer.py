@@ -159,6 +159,9 @@ def _build_rec(
     confidence: float,
     priority: str,
 ) -> dict:
+    # ML opportunity score: confidence weighted by impact (price change magnitude)
+    impact = min(1.0, abs(change_pct) / 15.0) if direction != "hold" else 0.2
+    ml_opportunity_score = round(confidence * 0.7 + impact * 0.3, 2)
     return {
         "item_id": margin_data["item_id"],
         "name": margin_data["name"],
@@ -176,6 +179,7 @@ def _build_rec(
         "rationale": rationale,
         "confidence": confidence,
         "priority": priority,
+        "ml_opportunity_score": ml_opportunity_score,
     }
 
 

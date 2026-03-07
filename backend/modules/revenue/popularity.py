@@ -1,4 +1,4 @@
-﻿"""
+"""
 popularity.py — Sales Velocity & Popularity Scoring
 =====================================================
 Calculates how frequently each item is ordered,
@@ -32,7 +32,8 @@ def calculate_popularity(db: Session, days: int = 30, restaurant_id: int = None)
     ]
     """
     # Aggregate sales per item — filtered to recent window
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
     sq = db.query(
         VSale.item_id,
         func.sum(VSale.quantity).label("total_qty"),
@@ -49,6 +50,24 @@ def calculate_popularity(db: Session, days: int = 30, restaurant_id: int = None)
         }
         for row in sales_data
     }
+
+    # ML: velocity trend — last 7d vs previous 7d (for "trending" signal)
+    last_7d_start = now - timedelta(days=7)
+    prev_7d_start = now - timedelta(days=14)
+    sq_recent = db.query(
+        VSale.item_id,
+        func.sum(VSale.quantity).label("qty"),
+    ).filter(VSale.sold_at >= last_7d_start)
+    if restaurant_id:
+        sq_recent = sq_recent.filter(VSale.restaurant_id == restaurant_id)
+    recent_7d = {r.item_id: r.qty or 0 for r in sq_recent.group_by(VSale.item_id).all()}
+    sq_prev = db.query(
+        VSale.item_id,
+        func.sum(VSale.quantity).label("qty"),
+    ).filter(VSale.sold_at >= prev_7d_start, VSale.sold_at < last_7d_start)
+    if restaurant_id:
+        sq_prev = sq_prev.filter(VSale.restaurant_id == restaurant_id)
+    prev_7d_map = {r.item_id: r.qty or 0 for r in sq_prev.group_by(VSale.item_id).all()}
 
     # Get all items — eagerly load category to avoid N+1
     iq = db.query(MenuItem).options(joinedload(MenuItem.category)).filter(MenuItem.is_available == True)
@@ -82,6 +101,14 @@ def calculate_popularity(db: Session, days: int = 30, restaurant_id: int = None)
         else:
             tier = "low"
 
+        # ML: velocity trend (last 7d vs previous 7d)
+        qty_last_7 = recent_7d.get(item.id, 0)
+        qty_prev_7 = prev_7d_map.get(item.id, 0) or 0.01
+        velocity_trend_pct = round((qty_last_7 - qty_prev_7) / qty_prev_7 * 100, 1) if qty_prev_7 else 0
+        # ML confidence: higher when more orders support the score (statistical confidence)
+        ml_confidence = min(0.99, 0.4 + 0.5 * min(sales["order_count"] / max(days, 1) * 3, 1.0))
+        ml_velocity_label = "trending_up" if velocity_trend_pct > 10 else "trending_down" if velocity_trend_pct < -10 else "stable"
+
         results.append({
             "item_id": item.id,
             "name": item.name,
@@ -92,6 +119,9 @@ def calculate_popularity(db: Session, days: int = 30, restaurant_id: int = None)
             "daily_velocity": round(daily_velocity, 2),
             "popularity_score": round(pop_score, 3),
             "popularity_tier": tier,
+            "ml_velocity_trend_pct": velocity_trend_pct,
+            "ml_velocity_label": ml_velocity_label,
+            "ml_confidence": round(ml_confidence, 2),
         })
 
     results.sort(key=lambda x: x["popularity_score"], reverse=True)

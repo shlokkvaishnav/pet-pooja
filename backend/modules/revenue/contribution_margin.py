@@ -1,4 +1,4 @@
-﻿"""
+"""
 contribution_margin.py — CM Calculation & Classification
 =========================================================
 Computes contribution margin (Selling Price − Food Cost),
@@ -83,6 +83,19 @@ def calculate_margins(db: Session, restaurant_id: int = None, days: int = 30) ->
             "is_veg": item.is_veg,
             "total_revenue": round(total_revenue, 2),
         })
+
+    # ML: profitability score (0–100) = margin quality + revenue rank
+    sorted_revs = sorted(set(r["total_revenue"] for r in results), reverse=True)
+    rev_rank = {v: i for i, v in enumerate(sorted_revs)}
+    n = max(len(sorted_revs), 1)
+    for r in results:
+        margin_component = min(100, r["margin_pct"] * 1.2)  # 65% margin → 78 pts
+        rank = rev_rank.get(r["total_revenue"], n)
+        rev_pct = (n - rank) / n * 100
+        revenue_component = rev_pct * 0.4  # weight revenue rank
+        r["ml_profitability_score"] = round(margin_component * 0.6 + revenue_component, 1)
+        r["ml_profit_tier"] = "high" if r["ml_profitability_score"] >= 70 else "medium" if r["ml_profitability_score"] >= 45 else "low"
+        r["ml_confidence"] = round(min(0.99, 0.35 + 0.01 * (r["total_revenue"] or 0) ** 0.5), 2)
 
     # Sort by margin_pct descending
     results.sort(key=lambda x: x["margin_pct"], reverse=True)

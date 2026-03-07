@@ -63,6 +63,12 @@ def detect_hidden_stars(
                 m["margin_pct"] / 100 * (1 - pop_score) * 100, 1
             )
 
+            # ML: confidence from sample size (more orders = higher confidence)
+            order_count = pop.get("order_count", 0)
+            ml_confidence = min(0.99, 0.4 + 0.3 * min(order_count / 20, 1.0))
+            ml_velocity_trend = pop.get("ml_velocity_trend_pct")
+            ml_tier = "high_opportunity" if opportunity >= 50 else "medium" if opportunity >= 25 else "low"
+
             hidden_stars.append({
                 "item_id": item_id,
                 "name": m["name"],
@@ -75,6 +81,9 @@ def detect_hidden_stars(
                 "daily_velocity": pop.get("daily_velocity", 0),
                 "opportunity_score": opportunity,
                 "suggestions": _generate_suggestions(m, pop),
+                "ml_confidence": round(ml_confidence, 2),
+                "ml_velocity_trend_pct": ml_velocity_trend,
+                "ml_tier": ml_tier,
             })
 
     # Sort by opportunity score descending

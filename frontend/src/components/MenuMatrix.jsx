@@ -89,6 +89,17 @@ function CustomTooltip({ payload }) {
           {item.action_recommendation}
         </div>
       )}
+      {(item.ml_quadrant_confidence != null || item.ml_insight) && (
+        <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid var(--border-subtle)', fontSize: 10, color: 'var(--text-muted)' }}>
+          {item.ml_quadrant_confidence != null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+              <span style={{ background: 'var(--info)', color: '#fff', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>ML</span>
+              <span>Confidence {(item.ml_quadrant_confidence * 100).toFixed(0)}%</span>
+            </div>
+          )}
+          {item.ml_insight && <div style={{ opacity: 0.9 }}>{item.ml_insight}</div>}
+        </div>
+      )}
     </div>
   )
 }
@@ -112,6 +123,8 @@ function MenuMatrix({ items }) {
           quadrant: item.quadrant,
           action_recommendation: item.action || item.action_recommendation || 'Maintain visibility',
           selling_price: item.selling_price,
+          ml_quadrant_confidence: item.ml_quadrant_confidence,
+          ml_insight: item.ml_insight,
         }
       })
       .filter((item) => Number.isFinite(item.x) && Number.isFinite(item.y))
