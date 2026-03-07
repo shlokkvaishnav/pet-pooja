@@ -1,6 +1,6 @@
 import { motion, useInView } from 'motion/react'
 import { useRef } from 'react'
-import { formatRupees, formatConfidence, formatSupport, formatLift, formatPct } from '../utils/format'
+import { formatRupees, formatConfidence, formatSupport, formatLift } from '../utils/format'
 import { useThresholds } from '../context/SettingsContext'
 
 export default function ComboCard({ combo }) {
@@ -104,14 +104,6 @@ export default function ComboCard({ combo }) {
             <span style={{ color: 'var(--text-muted)' }}>Discount</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--warning)' }}>{combo.discount_pct?.toFixed(1)}%</span>
           </div>
-          {(combo.aov_uplift_pct > 0 || combo.aovUpliftPct > 0) && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4 }}>
-              <span style={{ color: 'var(--text-muted)' }}>AOV Uplift</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--accent)' }}>
-                +{formatPct(Math.min(100, Math.max(0, combo.aov_uplift_pct ?? combo.aovUpliftPct ?? 0)))}
-              </span>
-            </div>
-          )}
         </div>
       </div>
     </motion.div>

@@ -8,9 +8,6 @@ import {
   LONG_CACHE_TTL,
   MAX_CACHE_ENTRIES,
   TRANSIENT_HTTP_STATUSES,
-  API_RETRY_BACKOFF_BASE_MS,
-  RESTAURANT_STORAGE_KEY,
-  DEFAULT_COMBO_DISCOUNT_PCT,
 } from '../config'
 
 const api = axios.create({
@@ -83,7 +80,7 @@ async function requestWithRetry(fn, retries = 1, signal) {
       const status = error?.response?.status
       const transient = !status || TRANSIENT_STATUS.has(status)
       if (!transient || attempt >= retries) throw error
-      await sleep(API_RETRY_BACKOFF_BASE_MS * (2 ** attempt))
+      await sleep(200 * (2 ** attempt))
       attempt += 1
     }
   }
@@ -130,10 +127,9 @@ async function getWithCache(path, {
   return reqPromise
 }
 
-async function post(path, body, config = {}) {
+async function post(path, body) {
   try {
-    const res = await api.post(path, body, config)
-    return res.data
+    return await api.post(path, body).then((r) => r.data)
   } catch (error) {
     console.error('API Error:', error?.response?.data || error.message)
     throw normalizeError(error)
@@ -151,7 +147,7 @@ async function patch(path, body) {
 
 function _rid() {
   try {
-    const r = JSON.parse(localStorage.getItem(RESTAURANT_STORAGE_KEY) || '{}')
+    const r = JSON.parse(localStorage.getItem('sizzle_restaurant') || '{}')
     return r.restaurant_id || null
   } catch {
     return null
@@ -184,19 +180,17 @@ export const getHiddenStars = ({ signal } = {}) =>
 export const getRisks = ({ signal } = {}) =>
   getWithCache('/revenue/risks', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })
 
-/** Public config (branding, contact, default_combo_discount_pct, display_thresholds). No auth. */
-export const getPublicConfig = ({ signal } = {}) =>
-  getWithCache('/ops/public-config', { ttlMs: LONG_CACHE_TTL_MS, signal })
-
-export const getCombos = (forceRetrain = false, discountPct = DEFAULT_COMBO_DISCOUNT_PCT) =>
+export const getCombos = (forceRetrain = false, discountPct = 10) =>
   getWithCache('/revenue/combos', {
     params: _params({ force_retrain: forceRetrain, discount_pct: discountPct }),
     ttlMs: 0,
     bypassCache: true,
   })
 
-export const promoteCombo = (comboId) =>
-  post(`/revenue/combos/${comboId}/promote`, null, { params: _params() })
+export const promoteCombo = async (comboId) => {
+  const { data } = await api.post(`/revenue/combos/${comboId}/promote`, null, { params: _params() })
+  return data
+}
 
 export const getPriceRecommendations = ({ signal } = {}) =>
   getWithCache('/revenue/price-recommendations', { params: _params(), ttlMs: SHORT_CACHE_TTL_MS, signal })

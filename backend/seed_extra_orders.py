@@ -66,8 +66,7 @@ def seed_orders():
                     order_type=order_type,
                     source=source,
                     created_at=order_dt,
-                    updated_at=order_dt,
-                    settled_at=order_dt,
+                    updated_at=order_dt
                 )
                 
                 db.add(new_order)

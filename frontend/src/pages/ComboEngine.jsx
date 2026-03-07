@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { motion } from 'motion/react'
-import { getCombos, getPublicConfig, getDashboardMetrics, getMenuMatrix, promoteCombo as promoteComboApi } from '../api/client'
+import { getCombos, getDashboardMetrics, getMenuMatrix, promoteCombo as promoteComboApi } from '../api/client'
 import { formatPct, formatRupees } from '../utils/format'
 import { buildComboInsights } from '../utils/revenueInsights'
 import { useTranslation } from '../context/LanguageContext'
@@ -36,9 +36,9 @@ export default function ComboEngine() {
     setError(null)
     if (forceRetrain) setRefreshing(true)
     else setLoading(true)
-    // Discount % comes from backend public-config when available
+
     Promise.all([
-      getPublicConfig().then((c) => getCombos(forceRetrain, c?.default_combo_discount_pct)),
+      getCombos(forceRetrain),
       getMenuMatrix(),
       getDashboardMetrics(),
     ])
@@ -135,7 +135,7 @@ export default function ComboEngine() {
         }}
       >
         <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('page_combo_total')}</div><div style={{ fontSize: 28, fontWeight: 800 }}>{summary.totalCombos}</div></div></div>
-        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('page_combo_avg_aov')}</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent)' }}>{summary.avgAovUpliftPct > 0 ? `+${formatPct(summary.avgAovUpliftPct)}` : '—'}</div></div></div>
+        <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('page_combo_avg_aov')}</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--accent)' }}>{formatPct(summary.avgAovUpliftPct)}</div></div></div>
         <div className="card"><div className="card-body"><div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('page_combo_active')}</div><div style={{ fontSize: 28, fontWeight: 800, color: 'var(--success)' }}>{summary.activePromoted}</div></div></div>
       </section>
 
@@ -168,7 +168,7 @@ export default function ComboEngine() {
                     <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Combined Price</div><div style={{ fontWeight: 700 }}>{formatRupees(combo.combinedPrice)}</div></div>
                     <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Bundle Price</div><div style={{ fontWeight: 700, color: 'var(--success)' }}>{formatRupees(combo.bundlePrice)}</div></div>
                     <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Discount</div><div style={{ fontWeight: 700 }}>{formatPct(combo.discountPct)}</div></div>
-                    <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Est. AOV Uplift</div><div style={{ fontWeight: 700, color: combo.aovUpliftPct > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>{combo.aovUpliftPct > 0 ? `+${formatRupees(combo.aovUplift)} (${formatPct(combo.aovUpliftPct)})` : '—'}</div></div>
+                    <div><div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Est. AOV Uplift</div><div style={{ fontWeight: 700, color: 'var(--accent)' }}>+{formatPct(combo.aovUpliftPct)}</div></div>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
                     Confidence: <strong>{formatPct(combo.confidence * 100)}</strong>

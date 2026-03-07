@@ -434,46 +434,40 @@ def calculate_operational_metrics(db: Session, days: int = 30, restaurant_id: in
     - Peak hour identification
     - Orders by type (dine-in / takeaway / delivery)
     - Staff performance by order count
-
-    Uses confirmed orders only to stay consistent with v_sales view.
-    Revenue is derived from v_sales (line totals) to avoid tax-inclusion
-    asymmetry between voice orders and settled table orders.
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
 
-    # ── Revenue & order count from v_sales (confirmed-only view) ──
-    vsale_filter = [VSale.sold_at >= cutoff]
-    if restaurant_id:
-        vsale_filter.append(VSale.restaurant_id == restaurant_id)
-
-    rev_result = (
-        db.query(
-            func.coalesce(func.sum(VSale.total_price), 0.0).label("total_revenue"),
-            func.count(distinct(VSale.order_id)).label("total_orders"),
-        )
-        .filter(*vsale_filter)
-        .first()
-    )
-
-    total_revenue = float(rev_result.total_revenue or 0)
-    total_orders = int(rev_result.total_orders or 0)
-    aov = total_revenue / total_orders if total_orders > 0 else 0
-
-    # ── Peak hours & orders-by-type from confirmed orders ──
-    order_filter = [
-        Order.status == "confirmed",
+    base_filter = [
+        Order.status != "cancelled",
         Order.created_at >= cutoff,
     ]
     if restaurant_id:
-        order_filter.append(Order.restaurant_id == restaurant_id)
+        base_filter.append(Order.restaurant_id == restaurant_id)
 
+    # Average Order Value
+    aov_result = (
+        db.query(
+            func.avg(Order.total_amount).label("avg_order_value"),
+            func.count(Order.id).label("total_orders"),
+            func.sum(Order.total_amount).label("total_revenue"),
+        )
+        .filter(*base_filter)
+        .first()
+    )
+
+    aov = float(aov_result.avg_order_value or 0)
+    total_orders = int(aov_result.total_orders or 0)
+    total_revenue = float(aov_result.total_revenue or 0)
+
+    # Peak hours (group by hour of day)
     hour_data = (
         db.query(
             func.extract("hour", Order.created_at).label("hour"),
             func.count(Order.id).label("order_count"),
+            func.sum(Order.total_amount).label("revenue"),
         )
-        .filter(*order_filter)
+        .filter(*base_filter)
         .group_by(func.extract("hour", Order.created_at))
         .order_by(func.count(Order.id).desc())
         .all()
@@ -484,16 +478,19 @@ def calculate_operational_metrics(db: Session, days: int = 30, restaurant_id: in
             "hour": int(h.hour),
             "label": f"{int(h.hour):02d}:00",
             "order_count": int(h.order_count),
+            "revenue": round(float(h.revenue or 0), 2),
         }
         for h in hour_data
     ]
 
+    # Orders by type
     type_data = (
         db.query(
             Order.order_type,
             func.count(Order.id).label("count"),
+            func.sum(Order.total_amount).label("revenue"),
         )
-        .filter(*order_filter)
+        .filter(*base_filter)
         .group_by(Order.order_type)
         .all()
     )
@@ -502,6 +499,7 @@ def calculate_operational_metrics(db: Session, days: int = 30, restaurant_id: in
         {
             "type": t.order_type or "unknown",
             "count": int(t.count),
+            "revenue": round(float(t.revenue or 0), 2),
         }
         for t in type_data
     ]

@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import { StaggerReveal, staggerContainer, staggerItem } from '../utils/animations'
 import { Trash2, ShoppingCart, ClipboardList, CheckCircle } from 'lucide-react'
 import { buildUpsellCandidates } from '../utils/revenueInsights'
-import { VOICE_AUTO_LISTEN_DELAY_MS, RESTAURANT_STORAGE_KEY } from '../config'
+import { VOICE_AUTO_LISTEN_DELAY_MS } from '../config'
 import { useTranslation } from '../context/LanguageContext'
 
 function generateSessionId() {
@@ -17,7 +17,7 @@ function generateSessionId() {
 
 function getRestaurantId() {
   try {
-    const saved = JSON.parse(localStorage.getItem(RESTAURANT_STORAGE_KEY) || '{}')
+    const saved = JSON.parse(localStorage.getItem('sizzle_restaurant') || '{}')
     return saved.restaurant_id || null
   } catch {
     return null

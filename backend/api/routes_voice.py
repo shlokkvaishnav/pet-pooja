@@ -38,27 +38,8 @@ class TextInput(BaseModel):
     restaurant_id: int | None = None
 
 
-class OrderItemConfirm(BaseModel):
-    """Validated line item for order confirmation."""
-    item_id: int = Field(..., gt=0, description="Menu item ID")
-    quantity: int = Field(1, ge=1, le=99)
-    unit_price: float = Field(..., ge=0)
-    line_total: float = Field(..., ge=0)
-    name: str | None = None
-    modifiers: dict | None = None
-
-
-class OrderConfirm(BaseModel):
-    """Validated order payload for confirmation."""
-    order_id: str = Field(..., min_length=1, max_length=64)
-    items: list[OrderItemConfirm] = Field(..., min_length=1, max_length=100)
-    total: float = Field(..., ge=0)
-    order_type: str | None = Field("dine_in", pattern=r"^(dine_in|takeaway|delivery)$")
-    table_number: str | None = None
-
-
 class ConfirmOrderInput(BaseModel):
-    order: dict  # Validated in endpoint via OrderConfirm
+    order: dict
     kot: dict | None = None
 
 
@@ -336,40 +317,19 @@ def confirm_order(
 ):
     """
     Save confirmed order to DB.
-    Accepts: {order: {order_id, items: [{item_id, quantity, unit_price, line_total}], total, ...}}
+    Accepts: {order: {...}}
     Returns: {order_id, kot}
     """
-    from pydantic import ValidationError
+    order = body.order
+    if not order or not order.get("items"):
+        raise HTTPException(status_code=400, detail="Order must contain items.")
 
-    raw = body.order
-    if not raw or not isinstance(raw, dict):
-        raise HTTPException(status_code=400, detail="Order must be a non-empty object.")
-
-    try:
-        validated = OrderConfirm.model_validate(raw)
-    except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
-
-    order_dict = {
-        "order_id": validated.order_id,
-        "items": [
-            {
-                "item_id": i.item_id,
-                "quantity": i.quantity,
-                "unit_price": i.unit_price,
-                "line_total": i.line_total,
-                "modifiers": i.modifiers or {},
-            }
-            for i in validated.items
-        ],
-        "total": validated.total,
-        "order_type": validated.order_type or "dine_in",
-        "table_number": validated.table_number,
-    }
-    kot = body.kot or generate_kot(order_dict)
+    kot = body.kot
+    if not kot:
+        kot = generate_kot(order)
 
     try:
-        result = save_order_to_db(order_dict, kot, db, restaurant_id=restaurant_id)
+        result = save_order_to_db(order, kot, db, restaurant_id=restaurant_id)
         return {
             "success": True,
             "order_id": result["order_id"],
@@ -377,11 +337,9 @@ def confirm_order(
             "kot": kot,
             "status": "confirmed",
         }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception("Order confirmation failed")
-        raise HTTPException(status_code=500, detail="Order save failed. Check server logs.")
+        raise HTTPException(status_code=500, detail=f"Order save failed: {e}")
 
 
 # ── 5. GET /api/voice/orders ──

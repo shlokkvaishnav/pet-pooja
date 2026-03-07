@@ -20,7 +20,6 @@ from sqlalchemy import (
     JSON,
     CheckConstraint,
     ARRAY,
-    Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -72,7 +71,6 @@ class RestaurantSettings(Base):
     voice_ai_config = Column(JSON, default=dict)
     profile_extras = Column(JSON, default=dict)  # operating_hours, gst_number, etc.
     display_thresholds = Column(JSON, default=dict)  # cm%, risk, confidence thresholds
-    combo_category_groups = Column(JSON, default=None)  # {"main": ["Mains", ...], "bread": [...]} for combo rules
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     restaurant = relationship("Restaurant", back_populates="settings")
@@ -181,14 +179,11 @@ class Order(Base):
     source = Column(String(20), default="voice")  # voice | manual
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
-    settled_at = Column(DateTime, nullable=True)  # set when order is confirmed/settled
 
     restaurant = relationship("Restaurant", back_populates="orders")
     order_items = relationship("OrderItem", back_populates="order")
     kots = relationship("KOT", back_populates="order", foreign_keys="[KOT.order_id]")
     table = relationship("RestaurantTable", foreign_keys=[table_id])
-
-    __table_args__ = (Index("ix_orders_restaurant_created", "restaurant_id", "created_at"),)
 
 
 class OrderItem(Base):
@@ -242,8 +237,6 @@ class ComboSuggestion(Base):
     confidence = Column(Float)  # Association rule confidence
     lift = Column(Float)  # Association rule lift
     combo_score = Column(Float)  # lift × avg_cm × confidence
-    aov_uplift = Column(Float, nullable=True)  # Absolute AOV uplift (₹)
-    aov_uplift_pct = Column(Float, nullable=True)  # AOV uplift percentage
     created_at = Column(DateTime, default=_utcnow)
 
 
@@ -366,43 +359,3 @@ class VSale(Base):
     total_price = Column(Float)
     order_type = Column(String(20))
     sold_at = Column(DateTime)
-
-
-# ── Staff & Shifts (PIN-based staff login) ─────────
-
-class Staff(Base):
-    """Staff member for PIN-based login (waiter, cashier, manager, chef)."""
-
-    __tablename__ = "staff"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(150), nullable=False)
-    role = Column(String(30), nullable=False, default="waiter")
-    pin_hash = Column(String(128), nullable=False)
-    phone = Column(String(20))
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=_utcnow)
-
-    __table_args__ = (
-        CheckConstraint("role IN ('waiter','cashier','manager','chef')", name="ck_staff_role"),
-    )
-
-
-class Shift(Base):
-    """Shift session opened/closed by staff."""
-
-    __tablename__ = "shifts"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(50))
-    started_at = Column(DateTime, nullable=False, default=_utcnow)
-    ended_at = Column(DateTime, nullable=True)
-    opened_by = Column(Integer, ForeignKey("staff.id"), nullable=False)
-    closed_by = Column(Integer, ForeignKey("staff.id"), nullable=True)
-    opening_cash = Column(Float, default=0.0)
-    closing_cash = Column(Float, nullable=True)
-    status = Column(String(10), default="open")
-
-    __table_args__ = (
-        CheckConstraint("status IN ('open','closed')", name="ck_shift_status"),
-    )

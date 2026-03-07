@@ -1,4 +1,4 @@
-"""
+﻿"""
 routes_revenue.py — Revenue Intelligence API Endpoints
 ========================================================
 /api/revenue/* — Dashboard, menu matrix, hidden stars, risks,
@@ -18,7 +18,6 @@ from sqlalchemy import func
 
 from database import get_db
 from models import MenuItem, VSale, Category, RestaurantSettings
-from config import get_default_settings, REVENUE_CACHE_TTL_SEC, REVENUE_CACHE_MAX_SIZE
 from modules.revenue.analyzer import run_full_analysis
 from modules.revenue.analyzer import _calculate_health_score
 from modules.revenue.contribution_margin import calculate_margins
@@ -44,27 +43,28 @@ from modules.revenue.advanced_analytics import (
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.revenue")
 
-# ── Default thresholds from config (fallback if no settings) ──
-def _default_thresholds():
-    return get_default_settings()["display_thresholds"]
+# ── Default thresholds (fallback if no settings) ──
+DEFAULT_THRESHOLDS = {
+    "risk_margin_max": 40,
+    "risk_popularity_min": 0.5,
+}
 
 
 def _get_thresholds(db: Session, restaurant_id: int | None) -> dict:
     """Load display_thresholds from the restaurant settings, falling back to defaults."""
-    base = _default_thresholds()
     if restaurant_id:
         row = db.query(RestaurantSettings).filter(
             RestaurantSettings.restaurant_id == restaurant_id
         ).first()
         if row and row.display_thresholds:
-            return {**base, **row.display_thresholds}
-    return base
+            return {**DEFAULT_THRESHOLDS, **row.display_thresholds}
+    return DEFAULT_THRESHOLDS
 
 # ── Thread-safe cache for expensive computations ──
 _cache_lock = threading.Lock()
 _cache: dict = {}
-_CACHE_TTL = REVENUE_CACHE_TTL_SEC
-_CACHE_MAX_SIZE = REVENUE_CACHE_MAX_SIZE
+_CACHE_TTL = 300  # 5 minutes
+_CACHE_MAX_SIZE = 100
 
 
 def _get_cached(key: str):
@@ -311,7 +311,7 @@ def get_combo_suggestions(
         # If empty or force retrain, run pipeline inline (synchronous)
         if force_retrain or len(combos) == 0:
             logger.info("Running combo pipeline inline (force=%s, existing=%d)", force_retrain, len(combos))
-            generate_combos(db, restaurant_id=restaurant_id, force_retrain=True)
+            generate_combos(db, force_retrain=True)
             combos = fetch_combos_from_db(db, restaurant_id=restaurant_id)
 
         return {"combos": combos}
@@ -346,18 +346,16 @@ def promote_combo(
     """
     POST /api/revenue/combos/{combo_id}/promote
     Converts an AI suggestion into a real MenuItem in the exact database.
-    Single transaction: category (if created) + menu item committed together.
     """
     from models import ComboSuggestion, Category
-    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-
     try:
         combo = db.query(ComboSuggestion).filter(ComboSuggestion.id == combo_id).first()
         if not combo:
             raise HTTPException(status_code=404, detail="Combo suggestion not found")
 
+        # Get or create "Combos" category
         combo_cat = db.query(Category).filter(
-            Category.restaurant_id == combo.restaurant_id,
+            Category.restaurant_id == combo.restaurant_id, 
             func.lower(Category.name) == "combos"
         ).first()
 
@@ -368,10 +366,12 @@ def promote_combo(
                 is_active=True
             )
             db.add(combo_cat)
-            db.flush()
+            db.commit()
+            db.refresh(combo_cat)
 
-        food_cost = max(0.0, (combo.combo_price or 0) - (combo.expected_margin or 0))
+        food_cost = combo.combo_price - combo.expected_margin
 
+        # Check if already exists
         existing = db.query(MenuItem).filter(
             MenuItem.restaurant_id == combo.restaurant_id,
             MenuItem.name == combo.name
@@ -384,29 +384,23 @@ def promote_combo(
             restaurant_id=combo.restaurant_id,
             name=combo.name,
             category_id=combo_cat.id,
-            selling_price=combo.combo_price or 0,
+            selling_price=combo.combo_price,
             food_cost=food_cost,
-            description=f"AI Optimized Combo: {', '.join(combo.item_names or [])}",
-            is_veg=True,
+            description=f"AI Optimized Combo: {', '.join(combo.item_names)}",
+            is_veg=True, # default true, update via UI if needed
             is_available=True,
             tags=["ai-combo", "promoted"]
         )
         db.add(new_item)
-        db.flush()
         db.commit()
         db.refresh(new_item)
 
         return {"status": "success", "menu_item_id": new_item.id}
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error promoting combo (DB)")
-        raise HTTPException(status_code=500, detail="Failed to promote combo. Check server logs.")
     except Exception as e:
-        db.rollback()
         logger.exception("Error promoting combo")
-        raise HTTPException(status_code=500, detail="Failed to promote combo. Check server logs.")
+        raise HTTPException(status_code=500, detail=f"Failed to promote combo: {e}")
 
 
 @router.get("/price-recommendations")

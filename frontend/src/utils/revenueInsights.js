@@ -72,15 +72,12 @@ function normalizeCombo(combo, index, menuItems = []) {
   const combined = itemPrices.reduce((sum, p) => sum + num(p), 0)
   const discountPct = Math.min(25, Math.max(5, num(combo.discount_pct, 10)))
   const bundlePrice = num(combo.combo_price ?? combo.suggested_bundle_price, Math.round(combined * (1 - discountPct / 100)))
-  const rawUplift = combo.aov_uplift_pct != null && combo.aov_uplift_pct !== 0
-    ? num(combo.aov_uplift_pct)
-    : Math.max(0, Math.min(28, Math.round((num(combo.lift, 1.4) - 1) * 12 + num(combo.confidence, 0.6) * 10)))
-  const uplift = Math.min(100, Math.max(0, rawUplift))
+  const uplift = Math.max(6, Math.min(28, Math.round((num(combo.lift, 1.4) - 1) * 12 + num(combo.confidence, 0.6) * 10)))
   const confidence = Math.max(0.35, Math.min(0.99, num(combo.confidence, 0.55)))
   const support = Math.max(0.03, Math.min(0.9, num(combo.support, 0.08)))
 
   return {
-    id: combo.id ?? combo.combo_id ?? `combo-${index + 1}`,
+    id: combo.combo_id || combo.id || `combo-${index + 1}`,
     itemNames: names.length ? names : [`Combo ${index + 1}`],
     itemPrices,
     combinedPrice: combined,
@@ -90,7 +87,6 @@ function normalizeCombo(combo, index, menuItems = []) {
     support,
     occurrenceCount: num(combo.occurrence_count, 0),
     lift: num(combo.lift, 1.3),
-    aovUplift: num(combo.aov_uplift, 0),
     aovUpliftPct: uplift,
     source: combo.source || 'real',
   }

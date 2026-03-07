@@ -7,13 +7,11 @@ routes_ops.py — Operations & Back-Office Endpoints
 import csv
 import hashlib
 import logging
-import os
 from datetime import datetime, timedelta, timezone, date
 from io import StringIO
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -33,47 +31,9 @@ from models import (
     RestaurantSettings,
 )
 from api.auth import require_role
-from config import (
-    get_default_settings,
-    get_default_combo_category_groups,
-    ORDER_ID_PREFIX,
-    ORDERS_DEFAULT_LIMIT,
-    ORDERS_MAX_LIMIT,
-    ORDERS_DEFAULT_DAYS,
-    MENU_ITEMS_LIST_LIMIT,
-    REPORTS_DEFAULT_DAYS,
-    REPORTS_TOP_N,
-    REPORTS_EXPORT_TOP_N,
-    APP_NAME,
-    CONTACT_EMAIL,
-    CONTACT_PHONE,
-    CONTACT_LOCATION,
-    DEFAULT_COMBO_DISCOUNT_PCT,
-)
 
 router = APIRouter()
 logger = logging.getLogger("petpooja.api.ops")
-
-# Order ID format: non-empty, max 64 chars (e.g. ORD-XXXXXXXXXX)
-ORDER_ID_MAX_LEN = 64
-EXPOSE_ERROR_DETAILS = os.getenv("EXPOSE_ERROR_DETAILS", "false").lower() in ("1", "true", "yes")
-
-
-def _validate_order_id(order_id: str) -> None:
-    """Raise 400 if order_id is invalid (empty or too long)."""
-    if not order_id or not isinstance(order_id, str):
-        raise HTTPException(status_code=400, detail="Order ID is required")
-    if len(order_id.strip()) == 0:
-        raise HTTPException(status_code=400, detail="Order ID cannot be blank")
-    if len(order_id) > ORDER_ID_MAX_LEN:
-        raise HTTPException(status_code=400, detail="Order ID too long")
-
-
-def _safe_500_detail(exc: Exception) -> str:
-    """Return detail for 500 responses; hide internals unless EXPOSE_ERROR_DETAILS is set."""
-    if EXPOSE_ERROR_DETAILS:
-        return str(exc)
-    return "An internal error occurred. Check server logs for details."
 
 
 def _utcnow_fn():
@@ -131,8 +91,8 @@ class StockAdjustInput(BaseModel):
 
 
 class IngredientUpdateInput(BaseModel):
-    reorder_level: float | None = Field(None, ge=0, description="Reorder level (non-negative)")
-    cost_per_unit: float | None = Field(None, ge=0, description="Cost per unit (non-negative)")
+    reorder_level: float | None = None
+    cost_per_unit: float | None = None
 
 
 class SettingsUpdateInput(BaseModel):
@@ -145,11 +105,57 @@ class SettingsUpdateInput(BaseModel):
     security: dict | None = None
     voice_ai_config: dict | None = None
     display_thresholds: dict | None = None
-    combo_category_groups: dict | None = None  # {"main": ["Mains", ...], "bread": [...]} for combo rules
 
 
-def _default_settings():
-    return get_default_settings()
+DEFAULT_SETTINGS = {
+    "menu_management": {
+        "default_tax_pct": 5.0,
+        "service_charge_pct": 0.0,
+        "hide_unavailable_items": True,
+        "category_ordering_mode": "manual",
+    },
+    "notifications": {
+        "low_stock_alerts": True,
+        "daily_revenue_digest": True,
+        "weekly_performance_report": True,
+    },
+    "integrations": {
+        "petpooja_connected": False,
+        "posist_connected": False,
+        "zomato_connected": False,
+        "swiggy_connected": False,
+        "payment_gateway": "not_connected",
+    },
+    "billing_plan": {
+        "plan_name": "Starter",
+        "plan_status": "active",
+        "usage_month_to_date": 0,
+        "invoices_available": False,
+    },
+    "security": {
+        "two_factor_enabled": False,
+        "active_sessions": 1,
+        "api_keys_configured": 0,
+    },
+    "voice_ai_config": {
+        "primary_language": "en",
+        "upsell_aggressiveness": "medium",
+        "order_confirmation_phrase": "Please confirm your order.",
+        "call_transfer_enabled": False,
+    },
+    "profile_extras": {
+        "operating_hours": "09:00-23:00",
+        "gst_number": "",
+    },
+    "display_thresholds": {
+        "cm_green_min": 65,
+        "cm_yellow_min": 50,
+        "risk_margin_max": 40,
+        "risk_popularity_min": 0.5,
+        "confidence_green_min": 80,
+        "confidence_yellow_min": 60,
+    },
+}
 
 
 def _generate_order_number(db: Session) -> str:
@@ -218,17 +224,16 @@ def _get_or_create_settings(db: Session, restaurant_id: int) -> RestaurantSettin
     settings = db.query(RestaurantSettings).filter(RestaurantSettings.restaurant_id == restaurant_id).first()
     if settings:
         return settings
-    _def = _default_settings()
     settings = RestaurantSettings(
         restaurant_id=restaurant_id,
-        menu_management=_def["menu_management"],
-        notifications=_def["notifications"],
-        integrations=_def["integrations"],
-        billing_plan=_def["billing_plan"],
-        security=_def["security"],
-        voice_ai_config=_def["voice_ai_config"],
-        profile_extras=_def["profile_extras"],
-        display_thresholds=_def["display_thresholds"],
+        menu_management=DEFAULT_SETTINGS["menu_management"],
+        notifications=DEFAULT_SETTINGS["notifications"],
+        integrations=DEFAULT_SETTINGS["integrations"],
+        billing_plan=DEFAULT_SETTINGS["billing_plan"],
+        security=DEFAULT_SETTINGS["security"],
+        voice_ai_config=DEFAULT_SETTINGS["voice_ai_config"],
+        profile_extras=DEFAULT_SETTINGS["profile_extras"],
+        display_thresholds=DEFAULT_SETTINGS["display_thresholds"],
     )
     db.add(settings)
     db.flush()
@@ -239,9 +244,9 @@ def _get_or_create_settings(db: Session, restaurant_id: int) -> RestaurantSettin
 
 @router.get("/orders")
 def get_orders(
-    limit: int = Query(ORDERS_DEFAULT_LIMIT, ge=1, le=ORDERS_MAX_LIMIT),
+    limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    days: int = Query(ORDERS_DEFAULT_DAYS, ge=1, le=365),
+    days: int = Query(30, ge=1, le=365),
     status: str | None = Query(None, pattern=r"^(building|confirmed|cancelled)$"),
     order_type: str | None = Query(None, pattern=r"^(dine_in|takeaway|delivery)$"),
     source: str | None = Query(None, pattern=r"^(voice|manual)$"),
@@ -354,9 +359,8 @@ def get_orders(
 
 @router.get("/orders/{order_id}")
 def get_order(order_id: str, db: Session = Depends(get_db)):
-    _validate_order_id(order_id)
     try:
-        order = db.query(Order).filter(Order.order_id == order_id.strip()).first()
+        order = db.query(Order).filter(Order.order_id == order_id).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
@@ -387,7 +391,7 @@ def create_order(
     try:
         rid = _resolve_restaurant_id(db, restaurant_id)
         order = Order(
-            order_id=f"{ORDER_ID_PREFIX}{uuid4().hex[:10].upper()}",
+            order_id=f"ORD-{uuid4().hex[:10].upper()}",
             order_number=_generate_order_number(db),
             restaurant_id=rid,
             total_amount=body.total_amount,
@@ -415,30 +419,20 @@ def create_order(
             "created_at": order.created_at.isoformat() if order.created_at else None,
             "updated_at": order.updated_at.isoformat() if order.updated_at else None,
         }
-    except HTTPException:
-        raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error creating order (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
-        db.rollback()
         logger.exception("Error creating order")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Order creation failed: {e}")
 
 
 @router.patch("/orders/{order_id}")
 def update_order(order_id: str, body: OrderUpdateInput, db: Session = Depends(get_db)):
-    _validate_order_id(order_id)
     try:
-        order = db.query(Order).filter(Order.order_id == order_id.strip()).first()
+        order = db.query(Order).filter(Order.order_id == order_id).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
         if body.status is not None:
             order.status = body.status
-            if body.status == "confirmed" and not order.settled_at:
-                order.settled_at = datetime.now(timezone.utc)
         if body.order_type is not None:
             order.order_type = body.order_type
         if body.source is not None:
@@ -465,21 +459,15 @@ def update_order(order_id: str, body: OrderUpdateInput, db: Session = Depends(ge
         }
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error updating order (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
-        db.rollback()
         logger.exception("Error updating order")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Order update failed: {e}")
 
 
 @router.post("/orders/{order_id}/cancel")
 def cancel_order(order_id: str, db: Session = Depends(get_db)):
-    _validate_order_id(order_id)
     try:
-        order = db.query(Order).filter(Order.order_id == order_id.strip()).first()
+        order = db.query(Order).filter(Order.order_id == order_id).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         if order.status == "cancelled":
@@ -493,14 +481,9 @@ def cancel_order(order_id: str, db: Session = Depends(get_db)):
         return {"order_id": order.order_id, "status": order.status}
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error cancelling order (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
-        db.rollback()
         logger.exception("Error cancelling order")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Order cancellation failed: {e}")
 
 
 @router.get("/tables")
@@ -540,55 +523,6 @@ def get_tables(
         )
         status_map = {s: c for s, c in status_counts}
 
-        # Batch load orders and items to avoid N+1
-        raw_to_pk = {}
-        int_pks = []
-        string_oids = []
-        for t in tables:
-            if not t.current_order_id:
-                continue
-            raw = t.current_order_id
-            if isinstance(raw, str) and not str(raw).strip().isdigit():
-                string_oids.append(raw)
-            else:
-                try:
-                    pk = int(raw)
-                    int_pks.append(pk)
-                    raw_to_pk[raw] = pk
-                except (TypeError, ValueError):
-                    string_oids.append(str(raw))
-        if string_oids:
-            oid_rows = db.query(Order.id, Order.order_id).filter(Order.order_id.in_(string_oids)).all()
-            for r in oid_rows:
-                raw_to_pk[r.order_id] = r.id
-            order_pks = list(set(int_pks + [r.id for r in oid_rows]))
-        else:
-            order_pks = list(set(int_pks))
-        orders_by_pk = {}
-        if order_pks:
-            orders = db.query(Order).filter(Order.id.in_(order_pks)).all()
-            orders_by_pk = {o.id: o for o in orders}
-            items_rows = (
-                db.query(
-                    OrderItem.order_pk,
-                    OrderItem.quantity,
-                    OrderItem.unit_price,
-                    OrderItem.line_total,
-                    MenuItem.name,
-                )
-                .join(MenuItem, MenuItem.id == OrderItem.item_id)
-                .filter(OrderItem.order_pk.in_(order_pks))
-                .all()
-            )
-            items_by_order = {}
-            for row in items_rows:
-                pk = row.order_pk
-                if pk not in items_by_order:
-                    items_by_order[pk] = []
-                items_by_order[pk].append(row)
-        else:
-            items_by_order = {}
-
         result_tables = []
         for t in tables:
             table_data = {
@@ -602,13 +536,28 @@ def get_tables(
                 "seated_at": None,
                 "updated_at": None,
             }
+            # If occupied and has an order, load the order details with items
             if t.current_order_id:
-                pk = raw_to_pk.get(t.current_order_id)
-                order = orders_by_pk.get(pk) if pk else None
+                # current_order_id may be an integer PK or a string order_id
+                raw_oid = t.current_order_id
+                if isinstance(raw_oid, str) and not str(raw_oid).isdigit():
+                    order = db.query(Order).filter(Order.order_id == raw_oid).first()
+                else:
+                    order = db.query(Order).filter(Order.id == int(raw_oid)).first()
                 if order:
                     table_data["seated_at"] = order.created_at.isoformat() if order.created_at else None
                     table_data["updated_at"] = order.updated_at.isoformat() if order.updated_at else None
-                    items = items_by_order.get(order.id, [])
+                    items = (
+                        db.query(
+                            OrderItem.quantity,
+                            OrderItem.unit_price,
+                            OrderItem.line_total,
+                            MenuItem.name,
+                        )
+                        .join(MenuItem, MenuItem.id == OrderItem.item_id)
+                        .filter(OrderItem.order_pk == order.id)
+                        .all()
+                    )
                     table_data["order"] = {
                         "order_id": order.order_id,
                         "order_number": order.order_number,
@@ -619,12 +568,12 @@ def get_tables(
                         "created_at": order.created_at.isoformat() if order.created_at else None,
                         "items": [
                             {
-                                "name": row.name,
-                                "quantity": row.quantity,
-                                "unit_price": row.unit_price,
-                                "line_total": row.line_total,
+                                "name": item.name,
+                                "quantity": item.quantity,
+                                "unit_price": item.unit_price,
+                                "line_total": item.line_total,
                             }
-                            for row in items
+                            for item in items
                         ],
                     }
             result_tables.append(table_data)
@@ -674,14 +623,9 @@ def update_table(
         }
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error updating table (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
-        db.rollback()
         logger.exception("Error updating table")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Table update failed: {e}")
 
 
 @router.post("/tables/{table_id}/book")
@@ -693,21 +637,20 @@ def book_table(
 ):
     """
     Book a free table — creates a new order for dine_in and marks table occupied.
-    Uses single locked query to avoid race with concurrent book requests.
     """
     try:
-        table = (
-            db.query(RestaurantTable)
-            .filter(RestaurantTable.id == table_id)
-            .with_for_update()
-            .first()
-        )
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).first()
+        if not table:
+            raise HTTPException(status_code=404, detail="Table not found")
+        table = db.query(RestaurantTable).filter(RestaurantTable.id == table_id).with_for_update().first()
         if not table:
             raise HTTPException(status_code=404, detail="Table not found")
         if table.status != "empty":
             raise HTTPException(status_code=400, detail=f"Table is currently {table.status}, cannot book")
 
-        order_id = f"{ORDER_ID_PREFIX}{uuid4().hex[:10].upper()}"
+        # Generate unique order_id
+        import uuid
+        order_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
         order_number = _generate_order_number(db)
 
         rid = _resolve_restaurant_id(db, restaurant_id)
@@ -744,7 +687,7 @@ def book_table(
     except Exception as e:
         db.rollback()
         logger.exception("Error booking table")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Table booking failed: {e}")
 
 
 @router.post("/tables/{table_id}/settle")
@@ -775,7 +718,6 @@ def settle_table(
         # Mark order as confirmed
         order.status = "confirmed"
         order.updated_at = _utcnow_fn()
-        order.settled_at = _utcnow_fn()
 
         # Recalculate total from order items
         order_items = db.query(OrderItem).filter(OrderItem.order_pk == order.id).all()
@@ -799,14 +741,9 @@ def settle_table(
         }
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error settling table (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
-        db.rollback()
         logger.exception("Error settling table")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Table settle failed: {e}")
 
 
 @router.post("/tables/{table_id}/reserve")
@@ -835,14 +772,9 @@ def reserve_table(
         }
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error reserving table (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
-        db.rollback()
         logger.exception("Error reserving table")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Table reserve failed: {e}")
 
 
 @router.post("/tables/{table_id}/unreserve")
@@ -871,14 +803,9 @@ def unreserve_table(
         }
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error unreserving table (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
-        db.rollback()
         logger.exception("Error unreserving table")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Table unreserve failed: {e}")
 
 
 @router.post("/tables/{table_id}/seat")
@@ -897,8 +824,9 @@ def seat_reserved_table(
         if table.status != "reserved":
             raise HTTPException(status_code=400, detail="Table is not reserved")
 
-        order_id = f"{ORDER_ID_PREFIX}{uuid4().hex[:10].upper()}"
-        order_number = _generate_order_number(db)
+        import uuid
+        order_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        order_number = f"#{db.query(func.count(Order.id)).scalar() + 1}"
 
         rid = _resolve_restaurant_id(db, restaurant_id)
         new_order = Order(
@@ -928,14 +856,10 @@ def seat_reserved_table(
         }
     except HTTPException:
         raise
-    except (IntegrityError, SQLAlchemyError) as e:
-        db.rollback()
-        logger.exception("Error seating at table (DB)")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
     except Exception as e:
         db.rollback()
         logger.exception("Error seating at table")
-        raise HTTPException(status_code=500, detail=_safe_500_detail(e))
+        raise HTTPException(status_code=500, detail=f"Table seat failed: {e}")
 
 
 @router.get("/menu-items")
@@ -961,7 +885,7 @@ def get_menu_items_list(
             .outerjoin(Category, Category.id == MenuItem.category_id)
             .filter(*filters)
             .order_by(MenuItem.name.asc())
-            .limit(MENU_ITEMS_LIST_LIMIT)
+            .limit(100)
             .all()
         )
         return {
@@ -1104,7 +1028,7 @@ def merge_tables_preview(body: TableMergeInput, db: Session = Depends(get_db)):
             .all()
         )
         if len(tables) != len(set(body.table_ids)):
-            raise HTTPException(status_code=400, detail="One or more table_ids were not found")
+            raise HTTPException(status_code=404, detail="One or more tables were not found")
 
         blocked = [t.table_number for t in tables if t.status == "cleaning"]
         if blocked:
@@ -1320,8 +1244,8 @@ def update_ingredient(
 
 @router.get("/reports")
 def get_reports(
-    days: int = Query(REPORTS_DEFAULT_DAYS, ge=7, le=90),
-    top_n: int = Query(REPORTS_TOP_N, ge=3, le=20),
+    days: int = Query(14, ge=7, le=90),
+    top_n: int = Query(8, ge=3, le=20),
     start_date: str | None = None,
     end_date: str | None = None,
     restaurant_id: int | None = Query(None),
@@ -1524,8 +1448,8 @@ def get_reports(
 @router.get("/reports/export")
 def export_reports(
     kind: str = Query("daily", pattern=r"^(daily|top_items|top_categories)$"),
-    days: int = Query(REPORTS_DEFAULT_DAYS, ge=7, le=90),
-    top_n: int = Query(REPORTS_EXPORT_TOP_N, ge=3, le=50),
+    days: int = Query(14, ge=7, le=90),
+    top_n: int = Query(20, ge=3, le=50),
     restaurant_id: int | None = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -1604,34 +1528,6 @@ def export_reports(
         raise HTTPException(status_code=500, detail=f"Reports export failed: {e}")
 
 
-@router.get("/public-config")
-def get_public_config(db: Session = Depends(get_db)):
-    """
-    Public configuration for frontend: branding, contact, and defaults.
-    No auth required. Used to avoid hardcoded values in the client.
-    """
-    try:
-        rid = _resolve_restaurant_id(db, None)
-        settings = _get_or_create_settings(db, rid)
-        _def = _default_settings()
-        display_thresholds = settings.display_thresholds or _def["display_thresholds"]
-        return {
-            "app_name": APP_NAME,
-            "contact": {
-                "email": CONTACT_EMAIL,
-                "phone": CONTACT_PHONE,
-                "location": CONTACT_LOCATION,
-            },
-            "default_combo_discount_pct": float(DEFAULT_COMBO_DISCOUNT_PCT),
-            "display_thresholds": display_thresholds,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Error fetching public config")
-        raise HTTPException(status_code=500, detail="Public config fetch failed")
-
-
 @router.get("/settings")
 def get_settings(
     restaurant_id: int | None = Query(None),
@@ -1647,7 +1543,6 @@ def get_settings(
             raise HTTPException(status_code=404, detail="Restaurant not found")
 
         settings = _get_or_create_settings(db, rid)
-        _def = _default_settings()
 
         return {
             "restaurant_profile": {
@@ -1661,14 +1556,13 @@ def get_settings(
                 "operating_hours": (settings.profile_extras or {}).get("operating_hours", ""),
                 "gst_number": (settings.profile_extras or {}).get("gst_number", ""),
             },
-            "menu_management": settings.menu_management or _def["menu_management"],
-            "notifications": settings.notifications or _def["notifications"],
-            "integrations": settings.integrations or _def["integrations"],
-            "billing_plan": settings.billing_plan or _def["billing_plan"],
-            "security": settings.security or _def["security"],
-            "voice_ai_config": settings.voice_ai_config or _def["voice_ai_config"],
-            "display_thresholds": settings.display_thresholds or _def["display_thresholds"],
-            "combo_category_groups": settings.combo_category_groups if settings.combo_category_groups is not None else get_default_combo_category_groups(),
+            "menu_management": settings.menu_management or DEFAULT_SETTINGS["menu_management"],
+            "notifications": settings.notifications or DEFAULT_SETTINGS["notifications"],
+            "integrations": settings.integrations or DEFAULT_SETTINGS["integrations"],
+            "billing_plan": settings.billing_plan or DEFAULT_SETTINGS["billing_plan"],
+            "security": settings.security or DEFAULT_SETTINGS["security"],
+            "voice_ai_config": settings.voice_ai_config or DEFAULT_SETTINGS["voice_ai_config"],
+            "display_thresholds": settings.display_thresholds or DEFAULT_SETTINGS["display_thresholds"],
         }
     except HTTPException:
         raise
@@ -1730,8 +1624,6 @@ def update_settings(
             settings.voice_ai_config = body.voice_ai_config
         if body.display_thresholds is not None:
             settings.display_thresholds = body.display_thresholds
-        if body.combo_category_groups is not None:
-            settings.combo_category_groups = body.combo_category_groups
 
         db.commit()
         return {"ok": True}
