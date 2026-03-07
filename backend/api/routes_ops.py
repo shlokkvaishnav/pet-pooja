@@ -211,12 +211,42 @@ def _sync_table_for_order(db: Session, order: Order):
         table.status = "reserved" if order.status == "building" else "occupied"
 
 
+def _ensure_restaurant_exists(db: Session, restaurant_id: int | None = None) -> Restaurant:
+    if restaurant_id is not None:
+        existing = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
+        if existing:
+            return existing
+
+    if restaurant_id is None:
+        existing = db.query(Restaurant).order_by(Restaurant.id.asc()).first()
+        if existing:
+            return existing
+        restaurant_id = 1
+
+    slug = f"default-{restaurant_id}"
+    email = f"default-{restaurant_id}@local.test"
+    restaurant = Restaurant(
+        id=restaurant_id,
+        name=f"Default Restaurant {restaurant_id}",
+        slug=slug,
+        email=email,
+        password_hash=hashlib.sha256(f"default-{restaurant_id}".encode("utf-8")).hexdigest(),
+        phone="",
+        address="",
+        cuisine_type="Multi-cuisine",
+        is_active=True,
+    )
+    db.add(restaurant)
+    db.commit()
+    db.refresh(restaurant)
+    return restaurant
+
+
 def _resolve_restaurant_id(db: Session, restaurant_id: int | None) -> int:
     if restaurant_id:
+        _ensure_restaurant_exists(db, restaurant_id)
         return restaurant_id
-    first_restaurant = db.query(Restaurant).order_by(Restaurant.id.asc()).first()
-    if not first_restaurant:
-        raise HTTPException(status_code=404, detail="No restaurants configured")
+    first_restaurant = _ensure_restaurant_exists(db, None)
     return first_restaurant.id
 
 
@@ -1538,9 +1568,7 @@ def get_settings(
     """
     try:
         rid = _resolve_restaurant_id(db, restaurant_id)
-        restaurant = db.query(Restaurant).filter(Restaurant.id == rid).first()
-        if not restaurant:
-            raise HTTPException(status_code=404, detail="Restaurant not found")
+        restaurant = _ensure_restaurant_exists(db, rid)
 
         settings = _get_or_create_settings(db, rid)
 
@@ -1582,9 +1610,7 @@ def update_settings(
     """
     try:
         rid = _resolve_restaurant_id(db, restaurant_id or body.restaurant_id)
-        restaurant = db.query(Restaurant).filter(Restaurant.id == rid).first()
-        if not restaurant:
-            raise HTTPException(status_code=404, detail="Restaurant not found")
+        restaurant = _ensure_restaurant_exists(db, rid)
 
         settings = _get_or_create_settings(db, rid)
 

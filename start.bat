@@ -1,37 +1,25 @@
 @echo off
-title Pet Pooja - Starting Services
+title Pet Pooja
 
-echo ========================================
-echo   Starting Pet Pooja Services
-echo ========================================
-echo.
+:: Kill anything already on port 8000
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do taskkill /PID %%a /F >nul 2>&1
 
-:: Start Backend (FastAPI + Uvicorn) in a new window
-echo [1/2] Starting Backend (port 8000)...
+:: Start Backend
 cd /d "%~dp0backend"
-start "Pet Pooja - Backend" cmd /k "(if exist ..\.venv\Scripts\activate.bat (call ..\.venv\Scripts\activate.bat) else if exist .venv\Scripts\activate.bat (call .venv\Scripts\activate.bat)) && python main.py"
+start "Backend" cmd /k "python main.py"
 
-:: Small delay to let backend initialize first
-timeout /t 3 /nobreak >nul
+:: Wait for backend to be ready (poll health endpoint)
+echo Waiting for backend...
+:wait
+timeout /t 2 /nobreak >nul
+curl -s http://localhost:8000/health >nul 2>&1
+if errorlevel 1 goto wait
+echo Backend ready!
 
-:: Start Frontend (Vite dev server) in a new window
-echo [2/2] Starting Frontend (Vite)...
+:: Start Frontend
 cd /d "%~dp0frontend"
-start "Pet Pooja - Frontend" cmd /k "npm run dev"
+start "Frontend" cmd /k "npm run dev"
 
-cd /d "%~dp0"
-
-:: Wait for Vite to initialize, then open the browser
-timeout /t 5 /nobreak >nul
+timeout /t 3 /nobreak >nul
 start http://localhost:3000/
-
-echo.
-echo ========================================
-echo   Both services are starting!
-echo   Backend:  http://localhost:8000
-echo   Frontend: check the Vite terminal
-echo ========================================
-echo.
-echo You can close this window. The services
-echo will keep running in their own windows.
-pause
+exit

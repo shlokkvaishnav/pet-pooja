@@ -19,7 +19,6 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     CheckConstraint,
-    ARRAY,
 )
 from sqlalchemy.orm import relationship
 
@@ -135,7 +134,7 @@ class MenuItem(Base):
     name_gu = Column(String(200))  # Gujarati name
     name_hi_en = Column(String(200))  # Hinglish name
     description = Column(Text)
-    aliases = Column(ARRAY(Text), default=list)  # ["pnr tikka", "panir tikka", "tikka paneer"]
+    aliases = Column(JSON, default=list)  # ["pnr tikka", "panir tikka", "tikka paneer"]
     category_id = Column(Integer, ForeignKey("categories.id"))
     selling_price = Column(Float, nullable=False)
     food_cost = Column(Float, nullable=False)
